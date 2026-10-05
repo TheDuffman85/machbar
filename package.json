@@ -1,0 +1,35 @@
+{
+  "name": "machbar",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.17.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @machbar/shared build && concurrently -k -n shared,api,web 'pnpm --filter @machbar/shared dev' 'pnpm --filter @machbar/api dev' 'pnpm --filter @machbar/web dev'",
+    "build": "pnpm --filter @machbar/shared build && pnpm --filter @machbar/api build && pnpm --filter @machbar/web build",
+    "start": "node apps/api/dist/index.js",
+    "typecheck": "pnpm -r typecheck && tsc -p tsconfig.tests.json",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "pnpm --filter @machbar/shared build && vitest run",
+    "test:e2e": "playwright test",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.2",
+    "@eslint/js": "^9.39.0",
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^24.0.0",
+    "concurrently": "^9.2.0",
+    "eslint": "^9.39.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.0",
+    "vitest": "^3.2.4"
+  }
+}

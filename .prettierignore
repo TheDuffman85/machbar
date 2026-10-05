@@ -1,0 +1,10 @@
+node_modules
+**/dist
+data
+.git
+.codex
+.agents
+.aws
+pnpm-lock.yaml
+playwright-report
+test-results

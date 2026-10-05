@@ -1,0 +1,23 @@
+services:
+  machbar:
+    build: .
+    restart: unless-stopped
+    ports:
+      - '${BIND_ADDRESS:-0.0.0.0}:${HOST_PORT:-3000}:3000'
+    environment:
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      SESSION_SECRET: ${SESSION_SECRET:?Set a random SESSION_SECRET of at least 32 characters in .env}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+    volumes:
+      - machbar_data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+volumes:
+  machbar_data:
