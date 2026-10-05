@@ -45,7 +45,6 @@ export default defineConfig(({ mode }) => {
       allowedHosts: appUrl ? [new URL(appUrl).hostname] : [],
       proxy: {
         '/api': { target: 'http://127.0.0.1:3000', changeOrigin: false },
-        '/auth': { target: 'http://127.0.0.1:3000', changeOrigin: false },
         '/health': { target: 'http://127.0.0.1:3000', changeOrigin: false },
       },
     },

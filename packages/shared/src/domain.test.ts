@@ -15,7 +15,7 @@ import {
 } from './index.js';
 const now = new Date('2026-10-05T12:00:00Z');
 function fixture() {
-  const doc = createUser('local');
+  const doc = createUser(randomUUID());
   const id = randomUUID();
   doc.habits.push({
     id,
@@ -153,7 +153,7 @@ describe('progress, streaks and rewards', () => {
     expect(progressFor(doc, now).gifts[giftId]!.state).toBe('claimed');
   });
   it('does not complete empty goals or award duplicate goal XP', () => {
-    const doc = createUser('local'),
+    const doc = createUser(randomUUID()),
       id = randomUUID(),
       stepId = randomUUID();
     doc.goals.push({
@@ -180,7 +180,7 @@ describe('progress, streaks and rewards', () => {
     expect(progressFor(doc, now)).toMatchObject({ xp: 100, level: 2, levelXp: 0 });
   });
   it('dates a re-completed goal step on the new day without double XP', () => {
-    const doc = createUser('local'),
+    const doc = createUser(randomUUID()),
       id = randomUUID();
     doc.goals.push({
       id: randomUUID(),

@@ -1,5 +1,12 @@
+import { localEntry, readSnapshot, writeSnapshot } from './helpers.js';
 import { expect, test, type Page } from '@playwright/test';
 import { AxeBuilder } from '@axe-core/playwright';
+import {
+  addDays,
+  applyCompletion,
+  completionKey,
+  type Bootstrap,
+} from '../packages/shared/src/index.js';
 const base = 'http://localhost:3100';
 test.beforeEach(async ({ request }) => {
   await request.post(`${base}/test/reset`, { headers: { origin: base } });
@@ -19,9 +26,7 @@ async function addHabit(page: Page, name = 'Take a little walk') {
   await expect(page.getByRole('button', { name: `Complete ${name}`, exact: true })).toBeVisible();
 }
 async function serverXp(page: Page, xp: number) {
-  await expect
-    .poll(async () => (await (await page.request.get('/api/bootstrap')).json()).progress.xp)
-    .toBe(xp);
+  await expect.poll(async () => (await readSnapshot(page)).progress.xp).toBe(xp);
 }
 async function serviceWorker(page: Page) {
   await page.evaluate(async () => {
@@ -43,6 +48,244 @@ test('onboarding, a daily habit, completion and undo survive reload', async ({ p
   await page.reload();
   await page.getByRole('button', { name: 'Undo Take a little walk', exact: true }).click();
   await serverXp(page, 0);
+});
+test('Today shows every streak and logs missed habits on their original dates', async ({
+  page,
+  context,
+}) => {
+  await onboard(page);
+  await addHabit(page);
+  const snapshot = (await readSnapshot(page)) as Bootstrap;
+  const today = snapshot.today;
+  const yesterday = addDays(today, -1);
+  const habit = snapshot.document.habits[0];
+  habit.schedules[0].from = addDays(today, -3);
+  // Today's schedule changed timezone and weekdays. Past checkoffs must use the old schedule.
+  habit.schedules.push({
+    from: today,
+    weekdays: [new Date(`${today}T12:00:00Z`).getUTCDay()],
+    timezone: 'UTC',
+  });
+  for (let i = 2; i <= 4; i++)
+    snapshot.document.habits.push({ ...habit, id: crypto.randomUUID(), title: `Habit ${i}` });
+  expect(
+    (
+      await page.request.post('/test/seed', { headers: { origin: base }, data: snapshot.document })
+    ).ok(),
+  ).toBe(true);
+  await page.reload();
+  const row = page.locator('.task-row').filter({ hasText: habit.title });
+  const streak = page
+    .locator('.streak-card > div')
+    .filter({ hasText: habit.title })
+    .locator('strong');
+  await expect(row.getByText('Current streak:', { exact: false })).toHaveCount(0);
+  await expect(
+    page.locator('.page-heading').getByRole('button', { name: 'Add a habit' }),
+  ).toHaveCount(0);
+  await expect(streak).toHaveText('0');
+  await expect(page.locator('.streak-card > div')).toHaveCount(4);
+  const nav = page.getByRole('navigation', { name: 'Main navigation' }).filter({ visible: true });
+  await expect(nav.getByRole('link')).toHaveText(['Today', 'Habits', 'Goals', 'Rewards']);
+  const selectedDate = page.getByLabel('Selected date', { exact: true });
+  await expect(page.locator('.history-toolbar input')).toHaveCount(0);
+  await expect(selectedDate).toHaveAttribute('datetime', today);
+  await expect(selectedDate).toHaveText(
+    new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeZone: 'UTC' }).format(
+      new Date(`${today}T12:00:00Z`),
+    ),
+  );
+  await expect(page.getByRole('button', { name: 'Next day', exact: true })).toBeDisabled();
+  await serviceWorker(page);
+  await page.getByRole('button', { name: 'Previous day', exact: true }).click();
+  await expect(selectedDate).toHaveAttribute('datetime', yesterday);
+  await expect(
+    page.getByText('Check off habits you did on this day.', { exact: false }),
+  ).toBeVisible();
+  await expect(row).toContainText('Every day');
+  await context.setOffline(true);
+  await row.getByRole('button', { name: `Complete ${habit.title}`, exact: true }).click();
+  await expect(streak).toHaveText('1');
+  await context.setOffline(false);
+  await serverXp(page, 10);
+  let saved = (await readSnapshot(page)) as Bootstrap;
+  expect(saved.document.completions[completionKey('habit', habit.id, yesterday)]).toMatchObject({
+    date: yesterday,
+    timezone: snapshot.document.preferences.timezone,
+    completed: true,
+  });
+  expect(saved.document.completions[completionKey('habit', habit.id, today)]).toBeUndefined();
+  await page.reload();
+  await expect(selectedDate).toHaveAttribute('datetime', today);
+  await page.getByRole('button', { name: 'Previous day', exact: true }).click();
+  await expect(row.getByRole('button', { name: `Undo ${habit.title}`, exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Previous day', exact: true }).click();
+  await row.getByRole('button', { name: `Complete ${habit.title}`, exact: true }).click();
+  await serverXp(page, 20);
+  await expect(streak).toHaveText('2');
+  await page.getByRole('button', { name: 'Next day', exact: true }).click();
+  await row.getByRole('button', { name: `Undo ${habit.title}`, exact: true }).click();
+  await serverXp(page, 10);
+  await expect(streak).toHaveText('0');
+  await page.getByRole('button', { name: 'Previous day', exact: true }).click();
+  await page.getByRole('button', { name: 'Previous day', exact: true }).click();
+  await expect(selectedDate).toHaveAttribute('datetime', addDays(today, -3));
+  await expect(page.getByRole('button', { name: 'Previous day', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Next day', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Back to today', exact: true })).toHaveCount(0);
+  for (let i = 0; i < 3; i++)
+    await page.getByRole('button', { name: 'Next day', exact: true }).click();
+  await expect(selectedDate).toHaveAttribute('datetime', today);
+  await expect(page.getByRole('button', { name: 'Next day', exact: true })).toBeDisabled();
+  saved = (await readSnapshot(page)) as Bootstrap;
+  expect(saved.document.completions[completionKey('habit', habit.id, yesterday)]?.completed).toBe(
+    false,
+  );
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({
+    path: `test-results/habit-history-${test.info().project.name}.png`,
+    fullPage: true,
+  });
+});
+for (const language of ['en', 'de'] as const) {
+  test(`Today resets its date when opened and keeps the ${language} date row aligned`, async ({
+    page,
+  }) => {
+    await onboard(page);
+    const snapshot = await readSnapshot(page);
+    snapshot.document.preferences.language = language;
+    expect(
+      (
+        await page.request.post('/test/seed', {
+          headers: { origin: base },
+          data: snapshot.document,
+        })
+      ).ok(),
+    ).toBe(true);
+    await page.reload();
+    const labels =
+      language === 'de'
+        ? {
+            date: 'Ausgewähltes Datum',
+            previous: 'Vorheriger Tag',
+            today: 'Heute',
+            habits: 'Gewohnheiten',
+          }
+        : { date: 'Selected date', previous: 'Previous day', today: 'Today', habits: 'Habits' };
+    const selectedDate = page.getByLabel(labels.date, { exact: true });
+    const previous = page.getByRole('button', { name: labels.previous, exact: true });
+    const nav = page.getByRole('navigation').filter({ visible: true });
+    const todayLink = nav.getByRole('link', { name: labels.today, exact: true });
+    await expect(selectedDate).toHaveAttribute('datetime', snapshot.today);
+    await previous.click();
+    await expect(selectedDate).toHaveAttribute('datetime', addDays(snapshot.today, -1));
+    await expect(page.locator('.history-actions button')).toHaveCount(2);
+    await expect(page.locator('.history-toolbar input')).toHaveCount(0);
+    const iconBox = await page.locator('.history-date-field svg').boundingBox();
+    const dateBox = await selectedDate.boundingBox();
+    expect(iconBox).not.toBeNull();
+    expect(dateBox).not.toBeNull();
+    expect(
+      Math.abs(iconBox!.y + iconBox!.height / 2 - dateBox!.y - dateBox!.height / 2),
+    ).toBeLessThan(2);
+    expect(iconBox!.x + iconBox!.width).toBeLessThan(dateBox!.x);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await page.locator('.history-toolbar').screenshot({
+      path: `test-results/history-toolbar-${language}-${test.info().project.name}.png`,
+    });
+    await todayLink.click();
+    await expect(selectedDate).toHaveAttribute('datetime', snapshot.today);
+    await previous.click();
+    await nav.getByRole('link', { name: labels.habits, exact: true }).click();
+    await expect(page).toHaveURL(/\/habits$/);
+    await expect(selectedDate).toHaveCount(0);
+    await todayLink.click();
+    await expect(selectedDate).toHaveAttribute('datetime', snapshot.today);
+    await previous.click();
+    await nav.getByRole('link', { name: labels.habits, exact: true }).click();
+    await expect(page).toHaveURL(/\/habits$/);
+    await expect(selectedDate).toHaveCount(0);
+    await page.goBack();
+    await expect(selectedDate).toHaveAttribute('datetime', snapshot.today);
+    await previous.click();
+    await page.reload();
+    await expect(selectedDate).toHaveAttribute('datetime', snapshot.today);
+  });
+}
+for (const dailyHistoryDays of [0, 7]) {
+  test(`Today respects a configured history limit of ${dailyHistoryDays} days`, async ({
+    page,
+  }) => {
+    await onboard(page);
+    const { today } = await readSnapshot(page);
+    await page.route('**/api/bootstrap', async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...(await response.json()), dailyHistoryDays } });
+    });
+    await page.reload();
+    const selectedDate = page.getByLabel('Selected date', { exact: true });
+    const previous = page.getByRole('button', { name: 'Previous day', exact: true });
+    const next = page.getByRole('button', { name: 'Next day', exact: true });
+    await expect(selectedDate).toHaveAttribute('datetime', today);
+    await expect(next).toBeDisabled();
+    for (let daysAgo = 1; daysAgo <= dailyHistoryDays; daysAgo++) {
+      await expect(previous).toBeEnabled();
+      await previous.click();
+      await expect(selectedDate).toHaveAttribute('datetime', addDays(today, -daysAgo));
+    }
+    await expect(previous).toBeDisabled();
+    if (dailyHistoryDays > 0) {
+      await next.click();
+      await expect(selectedDate).toHaveAttribute('datetime', addDays(today, -dailyHistoryDays + 1));
+      await expect(previous).toBeEnabled();
+      for (let i = 1; i < dailyHistoryDays; i++) await next.click();
+      await expect(selectedDate).toHaveAttribute('datetime', today);
+      await expect(next).toBeDisabled();
+    }
+  });
+}
+test('profile menu opens settings, dismisses and exposes profile switching', async ({ page }) => {
+  await onboard(page);
+  const trigger = page.getByRole('button', { name: 'Profile menu', exact: true });
+  const menu = page.getByRole('menu', { name: 'Profile menu', exact: true });
+  await trigger.click();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('menuitem')).toHaveCount(2);
+  await expect(menu.getByRole('menuitem', { name: 'Edit avatar', exact: true })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: 'Switch User', exact: true })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'Settings', exact: true })).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  const accessibility = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+  await expect(menu).toHaveCount(0);
+  await trigger.click();
+  await page.getByRole('heading', { name: 'Settings', exact: true }).click();
+  await expect(menu).toHaveCount(0);
+  await trigger.click();
+  await trigger.click();
+  await expect(menu).toHaveCount(0);
+  await page.getByLabel('Language', { exact: true }).selectOption('de');
+  await page.getByRole('button', { name: 'Dark', exact: true }).click();
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await page.getByRole('button', { name: 'Profilmenü', exact: true }).click();
+  await expect(page.getByRole('menuitem', { name: 'Einstellungen', exact: true })).toBeVisible();
+  await page.screenshot({ path: `test-results/profile-menu-${test.info().project.name}.png` });
 });
 test('German onboarding is centered, scrolls internally and locks the background', async ({
   page,
@@ -95,26 +338,70 @@ test('non-localhost HTTP supports onboarding, avatars and completion/undo', asyn
   const external = 'http://machbar.test:3100';
   await page.goto(external);
   expect(await page.evaluate(() => window.isSecureContext)).toBe(false);
+  await page.getByRole('button', { name: 'Edit avatar', exact: true }).click();
   await page.getByRole('button', { name: 'Another little face', exact: true }).click();
+  await page.getByRole('button', { name: 'Use this avatar', exact: true }).click();
   await page.getByLabel('What should we call you?').fill('LAN friend');
   await page.getByRole('button', { name: 'Let’s begin' }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Hey, LAN friend' })).toBeVisible();
   await addHabit(page, 'A LAN win');
   await page.getByRole('button', { name: 'Complete A LAN win', exact: true }).click();
-  await expect
-    .poll(() =>
-      page.evaluate(async () => (await (await fetch('/api/bootstrap')).json()).progress.xp),
-    )
-    .toBe(10);
+  await serverXp(page, 10);
   await page.reload();
   await page.getByRole('button', { name: 'Undo A LAN win', exact: true }).click();
-  await expect
-    .poll(() =>
-      page.evaluate(async () => (await (await fetch('/api/bootstrap')).json()).progress.xp),
-    )
-    .toBe(0);
+  await serverXp(page, 0);
 });
+test('goals and habits have separate pages and navigation links', async ({ page }) => {
+  await onboard(page);
+  const navigation = page.locator('nav:visible');
+  const goalsLink = navigation.getByRole('link', { name: 'Goals', exact: true });
+  const habitsLink = navigation.getByRole('link', { name: 'Habits', exact: true });
+
+  await goalsLink.click();
+  await expect(page).toHaveURL(/\/goals$/);
+  await expect(goalsLink).toHaveAttribute('aria-current', 'page');
+  await expect(habitsLink).not.toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('heading', { name: 'Goals', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add a habit', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'New goal', exact: true }).click();
+  await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('A cozy home');
+  await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'A cozy home', exact: true })).toBeVisible();
+
+  await habitsLink.click();
+  await expect(page).toHaveURL(/\/habits$/);
+  await expect(habitsLink).toHaveAttribute('aria-current', 'page');
+  await expect(goalsLink).not.toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('heading', { name: 'Habits', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'A cozy home', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'New goal', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Add a habit', exact: true }).click();
+  await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Take a little walk');
+  await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(
+    page.getByRole('heading', { name: 'Take a little walk', exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Habits', exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Take a little walk', exact: true }),
+  ).toBeVisible();
+  await page.getByLabel('Archived', { exact: true }).check();
+
+  await goalsLink.click();
+  await expect(page.getByLabel('Archived', { exact: true })).not.toBeChecked();
+  await expect(page.getByRole('heading', { name: 'A cozy home', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Take a little walk', exact: true })).toHaveCount(
+    0,
+  );
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+});
+
 test('goals can be broken into dated and undated steps, reordered, completed and edited', async ({
   page,
 }) => {
@@ -142,6 +429,14 @@ test('goals can be broken into dated and undated steps, reordered, completed and
   await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Get a tiny plant');
   await page.getByRole('dialog').getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(page.getByText('Get a tiny plant', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Archive Get a tiny plant', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Archive', exact: true });
+  await confirmation.getByRole('button', { name: 'Archive', exact: true }).click();
+  await expect(page.getByText('Get a tiny plant', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Archive A cozy home', exact: true }).click();
+  await confirmation.getByRole('button', { name: 'Archive', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'A cozy home', exact: true })).toHaveCount(0);
+  await serverXp(page, 20);
 });
 test('gift unlock, claiming and achievements', async ({ page }) => {
   await onboard(page);
@@ -157,8 +452,13 @@ test('gift unlock, claiming and achievements', async ({ page }) => {
   await serverXp(page, 10);
   await page.goto('/rewards');
   await expect(page.getByText('Ready for you', { exact: true })).toBeVisible();
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'I treated myself', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: 'I treated myself', exact: true });
+  await expect(confirmation).toContainText('Mark “New shoes” as claimed?');
+  await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.getByText('Ready for you', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'I treated myself', exact: true }).click();
+  await confirmation.getByRole('button', { name: 'I treated myself', exact: true }).click();
   await expect(page.getByText('Enjoyed', { exact: true })).toBeVisible();
   await expect(page.locator('.badge-card.earned')).toHaveCount(1);
   await page.goto('/');
@@ -167,6 +467,87 @@ test('gift unlock, claiming and achievements', async ({ page }) => {
   await page.goto('/rewards');
   await expect(page.getByText('Enjoyed', { exact: true })).toBeVisible();
   await expect(page.locator('.badge-card.earned')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Archive New shoes', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'Archive', exact: true })
+    .getByRole('button', { name: 'Archive', exact: true })
+    .click();
+  await expect(page.getByRole('heading', { name: 'New shoes', exact: true })).toHaveCount(0);
+});
+
+test('archive confirmations cancel safely, restore focus and preserve progress', async ({
+  page,
+}) => {
+  const nativeDialogs: string[] = [];
+  page.on('dialog', async (dialog) => {
+    nativeDialogs.push(dialog.type());
+    await dialog.dismiss();
+  });
+  await onboard(page);
+  await addHabit(page);
+  await page.getByRole('button', { name: 'Complete Take a little walk', exact: true }).click();
+  await serverXp(page, 10);
+  await page.goto('/habits');
+  const trigger = page.getByRole('button', { name: 'Archive Take a little walk', exact: true });
+  const confirmation = page.getByRole('dialog', { name: 'Archive', exact: true });
+  await trigger.click();
+  await expect(confirmation).toContainText(
+    'Archive “Take a little walk”? Your progress history will be kept.',
+  );
+  await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+  const accessibility = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+    .analyze();
+  expect(accessibility.violations.map((violation) => violation.id)).toEqual([]);
+  await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await trigger.click();
+  await page.keyboard.press('Escape');
+  await expect(confirmation).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await trigger.click();
+  await page.mouse.click(2, 2);
+  await expect(confirmation).toHaveCount(0);
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  await page.screenshot({ path: `test-results/confirmation-${test.info().project.name}.png` });
+  await confirmation.getByRole('button', { name: 'Archive', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(trigger).toHaveCount(0);
+  await page.getByLabel('Archived', { exact: true }).check();
+  await expect(page.getByText('Take a little walk', { exact: true })).toBeVisible();
+  await serverXp(page, 10);
+  expect(nativeDialogs).toEqual([]);
+});
+
+test('sync errors preserve locally archived data and show a dismissible alert', async ({
+  page,
+}) => {
+  await onboard(page);
+  await addHabit(page);
+  await readSnapshot(page);
+  await page.goto('/habits');
+  await page.route('**/api/sync', (route) =>
+    route.fulfill({ status: 500, json: { code: 'INTERNAL_ERROR' } }),
+  );
+  await page.getByRole('button', { name: 'Archive Take a little walk', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'Archive', exact: true })
+    .getByRole('button', { name: 'Archive', exact: true })
+    .click();
+  const alert = page.getByRole('alertdialog', { name: 'Something needs your attention' });
+  await expect(alert).toBeVisible();
+  await expect(alert.getByRole('button', { name: 'OK', exact: true })).toBeFocused();
+  await alert.getByRole('button', { name: 'OK', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Archive Take a little walk', exact: true }),
+  ).toHaveCount(0);
+  expect((await localEntry(page)).snapshot.document.habits[0].archivedAt).not.toBeNull();
+  expect((await localEntry(page)).queue.length).toBeGreaterThan(0);
+  await page.unroute('**/api/sync');
+  await page.getByRole('button', { name: 'Sync now', exact: true }).click();
+  expect((await readSnapshot(page)).document.habits[0].archivedAt).not.toBeNull();
 });
 test('offline reload preserves queued checkoffs and reconnect syncs exactly once', async ({
   page,
@@ -228,30 +609,21 @@ test('install action uses a supported browser prompt and falls back to instructi
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
-test('stale task edits require review before replacing another device’s changes', async ({
-  page,
-}) => {
+test('stale task edits merge automatically with server values winning ties', async ({ page }) => {
   await onboard(page);
   await addHabit(page);
-  await page.goto('/goals');
-  await page.getByRole('button', { name: 'Habits', exact: true }).click();
+  await page.goto('/habits');
   await page.getByRole('button', { name: 'Edit Take a little walk', exact: true }).click();
-  const snapshot = (await (await page.request.get('/api/bootstrap')).json()).document;
-  const habit = snapshot.habits[0];
-  const changed = await page.request.patch(`/api/habits/${habit.id}`, {
-    headers: { origin: base, 'x-machbar-user': 'local', 'if-match': String(snapshot.revision) },
-    data: { title: 'Another device’s title', weekdays: habit.schedules[0].weekdays },
-  });
-  expect(changed.status()).toBe(200);
-  await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('My reviewed title');
-  await page.getByRole('dialog').getByRole('button', { name: 'Save changes', exact: true }).click();
-  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Your data changed');
-  expect((await (await page.request.get('/api/bootstrap')).json()).document.habits[0].title).toBe(
-    'Another device’s title',
-  );
+  const snapshot = (await readSnapshot(page)).document;
+  snapshot.habits[0].title = 'Another device’s title';
+  await writeSnapshot(page, snapshot);
+  await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('My title');
   await page.getByRole('dialog').getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.getByText('My reviewed title', { exact: true })).toBeVisible();
+  await expect
+    .poll(async () => (await readSnapshot(page)).document.habits[0].title)
+    .toBe('Another device’s title');
+  await expect(page.getByText('Another device’s title', { exact: true })).toBeVisible();
 });
 test('layout and accessible controls', async ({ page }) => {
   await onboard(page);
@@ -272,7 +644,7 @@ test('layout and accessible controls', async ({ page }) => {
   const manifest = await (await page.request.get('/manifest.webmanifest')).json();
   expect(manifest.display).toBe('standalone');
   expect(manifest.icons).toHaveLength(3);
-  for (const route of ['/goals', '/rewards', '/settings']) {
+  for (const route of ['/goals', '/habits', '/rewards', '/settings']) {
     await page.goto(route);
     await expect(page.locator('.page-heading')).toBeVisible();
     const result = await new AxeBuilder({ page })
@@ -285,7 +657,7 @@ test('layout and accessible controls', async ({ page }) => {
   await page.getByRole('button', { name: 'Dark', exact: true }).click();
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(page.locator('html')).toHaveClass(/dark/);
-  for (const route of ['/', '/goals', '/rewards', '/settings']) {
+  for (const route of ['/', '/goals', '/habits', '/rewards', '/settings']) {
     await page.goto(route);
     await expect(page.locator('.page-heading')).toBeVisible();
     const result = await new AxeBuilder({ page })
@@ -305,85 +677,77 @@ test('layout and accessible controls', async ({ page }) => {
     fullPage: true,
   });
 });
-test('a changed server completion requires review before undo', async ({ page, context }) => {
+test('conflicting undo automatically keeps a remote recompletion', async ({ page, context }) => {
   await onboard(page);
   await addHabit(page);
   await page.getByRole('button', { name: 'Complete Take a little walk', exact: true }).click();
   await serverXp(page, 10);
   await serviceWorker(page);
-  const snapshot = (await (await page.request.get('/api/bootstrap')).json()).document;
+  const snapshot = (await readSnapshot(page)).document;
   await context.setOffline(true);
   await page.getByRole('button', { name: 'Undo Take a little walk', exact: true }).click();
   const h = snapshot.habits[0],
-    date = Object.values(snapshot.completions)[0] as { date: string };
-  for (const [completed, version] of [
-    [false, 1],
-    [true, 2],
-  ])
-    await page.request.post('/api/completions', {
-      headers: { origin: base, 'x-machbar-user': 'local' },
-      data: {
-        operationId: crypto.randomUUID(),
-        targetType: 'habit',
-        targetId: h.id,
-        date: date.date,
-        timezone: snapshot.preferences.timezone,
-        completed,
-        expectedVersion: version,
-      },
+    date = Object.values(snapshot.completions)[0].date;
+  for (const completed of [false, true]) {
+    applyCompletion(snapshot, {
+      operationId: crypto.randomUUID(),
+      targetType: 'habit',
+      targetId: h.id,
+      date,
+      timezone: snapshot.preferences.timezone,
+      completed,
+      expectedVersion: Object.values(snapshot.completions)[0].version,
     });
+  }
+  await writeSnapshot(page, snapshot);
   await context.setOffline(false);
-  await expect(page.getByText(/This challenge changed on another device/)).toBeVisible();
-  page.once('dialog', (dialog) => dialog.accept());
-  await page.getByRole('button', { name: 'Use server progress', exact: true }).click();
+  await serverXp(page, 10);
   await expect(
     page.getByRole('button', { name: 'Undo Take a little walk', exact: true }),
   ).toBeVisible();
-  await serverXp(page, 10);
+  await expect(page.getByText(/This challenge changed on another device/)).toHaveCount(0);
 });
-test('account switching never replays another account’s pending changes and logout clears cache', async ({
+test('profile changes preserve pending checkoffs without replaying them into another profile', async ({
   page,
   context,
-  request,
+  browser,
 }) => {
-  const authBase = 'http://localhost:3101';
-  await request.post(`${authBase}/test/reset`, { headers: { origin: authBase } });
-  await page.goto(`${authBase}/auth/login`);
-  await page.getByRole('link', { name: 'Alice', exact: true }).click();
-  await page.getByRole('button', { name: 'Let’s begin' }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: 'Hey, Alice' })).toBeVisible();
+  await onboard(page, 'Alice');
   await addHabit(page, 'Alice habit');
+  const alice = (await readSnapshot(page)).document.userId;
+  const otherContext = await browser.newContext({ locale: 'en-US' });
+  let bob: string;
+  try {
+    const other = await otherContext.newPage();
+    await onboard(other, 'Bob');
+    bob = (await readSnapshot(other)).document.userId;
+  } finally {
+    await otherContext.close();
+  }
+  const switchTo = async (userId: string) => {
+    await page.getByRole('button', { name: 'Profile menu', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Switch User', exact: true }).click();
+    await page.getByLabel('Existing user ID').fill(userId);
+    await page.getByRole('button', { name: 'Switch profile', exact: true }).click();
+    await expect(page.getByLabel('Current user ID')).toHaveValue(userId);
+    await page.getByRole('link', { name: 'Today', exact: true }).filter({ visible: true }).click();
+  };
+  await switchTo(bob);
+  await switchTo(alice);
   await serviceWorker(page);
   await context.setOffline(true);
   await page.getByRole('button', { name: 'Complete Alice habit', exact: true }).click();
-  const secondContext = await context.browser()!.newContext();
-  const other = await secondContext.newPage();
-  await other.goto(`${authBase}/auth/login`);
-  await other.getByRole('link', { name: 'Bob', exact: true }).click();
-  await context.addCookies(await secondContext.cookies());
-  await secondContext.close();
-  await context.setOffline(false);
+  await expect(page.getByText('Pending sync', { exact: true })).toBeVisible();
+  // Simulate a profile selection in another tab while this profile has unsynced checkoffs.
+  await page.evaluate((id) => localStorage.setItem('machbar-user-id', id), bob);
   await page.reload();
-  await page.getByRole('button', { name: 'Let’s begin' }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: 'Hey, Bob' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Hey, Bob', exact: true })).toBeVisible();
   await expect(page.getByText('Alice habit', { exact: true })).toHaveCount(0);
-  expect((await (await page.request.get(`${authBase}/api/bootstrap`)).json()).progress.xp).toBe(0);
-  await page.goto(`${authBase}/settings`);
-  await page.getByRole('button', { name: 'Log out', exact: true }).click();
-  await expect(page.getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
-  expect(
-    await page.evaluate(async () => {
-      const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        const req = indexedDB.open('machbar');
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-      });
-      return new Promise<number>((resolve) => {
-        const req = database.transaction('accounts').objectStore('accounts').count();
-        req.onsuccess = () => resolve(req.result);
-      });
-    }),
-  ).toBe(0);
+  await context.setOffline(false);
+  await serverXp(page, 0);
+  await switchTo(alice);
+  await expect(page.getByRole('button', { name: 'Undo Alice habit', exact: true })).toBeVisible();
+  await serverXp(page, 10);
+  const response = await page.request.get('/api/bootstrap', { headers: { 'X-Machbar-User': bob } });
+  expect(Object.values((await response.json()).document.completions)).toHaveLength(0);
 });

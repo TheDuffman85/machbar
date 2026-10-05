@@ -3,4 +3,3 @@ packages:
   - packages/*
 allowBuilds:
   esbuild: true
-  sodium-native: true

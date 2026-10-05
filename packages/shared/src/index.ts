@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { avatarOptionsSchema } from './avatar.js';
+export { avatarChoices, avatarOptionsSchema, type AvatarOptions } from './avatar.js';
 
 export const dateSchema = z
   .string()
@@ -8,6 +10,7 @@ export const dateSchema = z
     return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
   });
 const id = z.string().uuid();
+export const localUserIdSchema = z.string().uuid().toLowerCase();
 const title = z.string().trim().min(1).max(160);
 export const weekdaysSchema = z
   .array(z.number().int().min(0).max(6))
@@ -31,6 +34,7 @@ export const preferencesSchema = z.object({
   theme: z.enum(['light', 'dark', 'system']),
   timezone: timezoneSchema,
   avatarSeed: z.string().min(1).max(100),
+  avatarOptions: avatarOptionsSchema.nullable().optional(),
   onboarded: z.boolean(),
 });
 export const habitInputSchema = z
@@ -102,6 +106,36 @@ export const userDocumentSchema = z.object({
     z.object({ fingerprint: z.string(), version: z.number().int() }),
   ),
 });
+// Sync validates document integrity, while all feature rules remain in the client.
+export const syncDocumentSchema = userDocumentSchema.strict().superRefine((doc, context) => {
+  const habits = new Set(doc.habits.map((h) => h.id));
+  const goals = new Set(doc.goals.map((g) => g.id));
+  const steps = new Set(doc.goals.flatMap((g) => g.steps.map((s) => s.id)));
+  const allIds = [
+    ...doc.habits,
+    ...doc.goals,
+    ...doc.goals.flatMap((g) => g.steps),
+    ...doc.gifts,
+  ].map((i) => i.id);
+  if (new Set(allIds).size !== allIds.length)
+    context.addIssue({ code: 'custom', message: 'Duplicate entity ID' });
+  for (const [key, completion] of Object.entries(doc.completions)) {
+    if (
+      key !== completion.key ||
+      key !== completionKey(completion.targetType, completion.targetId, completion.date) ||
+      !(completion.targetType === 'habit' ? habits : steps).has(completion.targetId)
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['completions', key],
+        message: 'Invalid completion reference',
+      });
+  }
+  for (const gift of doc.gifts) {
+    if (!(gift.targetType === 'goal' ? goals : habits).has(gift.targetId))
+      context.addIssue({ code: 'custom', path: ['gifts'], message: 'Invalid gift reference' });
+  }
+});
 export const completionOperationSchema = z
   .object({
     operationId: id,
@@ -128,8 +162,8 @@ export type CompletionOperation = z.infer<typeof completionOperationSchema>;
 export type Bootstrap = {
   document: UserDocument;
   progress: Progress;
-  authMode: 'single' | 'oidc';
   today: string;
+  dailyHistoryDays: number;
 };
 export type Progress = {
   xp: number;
@@ -315,4 +349,15 @@ export function applyCompletion(
   };
   doc.operations[operation.operationId] = { fingerprint, version: nextVersion };
   return nextVersion;
+}
+
+export { mutateDocument } from './mutations.js';
+export { mergeDocuments, same } from './merge.js';
+export type SyncSnapshot = Pick<Bootstrap, 'document' | 'dailyHistoryDays'>;
+export function bootstrapFor(snapshot: SyncSnapshot, now = new Date()): Bootstrap {
+  return {
+    ...snapshot,
+    today: localDate(snapshot.document.preferences.timezone, now),
+    progress: progressFor(snapshot.document, now),
+  };
 }

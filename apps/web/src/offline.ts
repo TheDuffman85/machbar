@@ -1,13 +1,20 @@
 import { openDB, type DBSchema } from 'idb';
 import { newId } from './uuid';
+import { getLocalUserId, localUserIdKey } from './identity';
 import {
   applyCompletion,
+  bootstrapFor,
   completionKey,
-  localDate,
-  progressFor,
-  type Bootstrap,
+  DomainError,
+  localUserIdSchema,
+  mergeDocuments,
+  mutateDocument,
+  same,
   type CompletionOperation,
+  type SyncSnapshot,
 } from '@machbar/shared';
+import { migrateEntry, type Entry, type LegacyEntry } from './cache';
+export type { Entry } from './cache';
 
 export class ApiError extends Error {
   constructor(
@@ -17,39 +24,46 @@ export class ApiError extends Error {
     super(code);
   }
 }
-export type Entry = {
-  snapshot: Bootstrap;
-  queue: CompletionOperation[];
-  authRequired?: boolean;
-  conflict?: string;
-};
 interface CacheDB extends DBSchema {
-  accounts: { key: string; value: Entry };
-  meta: { key: string; value: string };
+  accounts: { key: string; value: Entry | LegacyEntry };
 }
-const db = openDB<CacheDB>('machbar', 1, {
-  upgrade(db) {
-    db.createObjectStore('accounts');
-    db.createObjectStore('meta');
+const db = openDB<CacheDB>('machbar', 2, {
+  upgrade(database, oldVersion, _newVersion, transaction) {
+    if (oldVersion === 0) database.createObjectStore('accounts');
+    else {
+      void (async () => {
+        let cursor = await transaction.objectStore('accounts').openCursor();
+        while (cursor) {
+          await cursor.update(migrateEntry(cursor.value));
+          cursor = await cursor.continue();
+        }
+      })().catch(() => transaction.abort());
+    }
+  },
+  blocking() {
+    void db.then((database) => database.close());
   },
 });
-let chain: Promise<unknown> = Promise.resolve();
-function serial<T>(fn: () => Promise<T>): Promise<T> {
-  const next = chain
-    .catch(() => {})
-    .then(async (): Promise<T> =>
-      navigator.locks ? await navigator.locks.request('machbar-sync', fn) : await fn(),
-    );
-  chain = next;
-  return next;
+const channel =
+  typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('machbar-data') : undefined;
+export function subscribeEntries(listener: () => void): () => void {
+  const receive = () => listener();
+  channel?.addEventListener('message', receive);
+  return () => channel?.removeEventListener('message', receive);
 }
 export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const headers = new Headers(options.headers);
+  if (options.body !== undefined) headers.set('Content-Type', 'application/json');
+  const localId = localStorage.getItem(localUserIdKey);
+  if (path.startsWith('/api/') && localId && !headers.has('X-Machbar-User'))
+    headers.set('X-Machbar-User', localId);
   let response: Response;
   try {
     response = await fetch(path, {
       ...options,
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', ...options.headers },
+      headers,
+      signal: options.signal ?? AbortSignal.timeout(10_000),
     });
   } catch {
     throw new ApiError('OFFLINE');
@@ -60,103 +74,143 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   }
   return response.json();
 }
-async function activeEntry(): Promise<Entry | undefined> {
-  const database = await db,
-    id = await database.get('meta', 'active');
-  return id ? database.get('accounts', id) : undefined;
+async function readEntry(id: string): Promise<Entry | undefined> {
+  const value = await (await db).get('accounts', id);
+  return value ? migrateEntry(value) : undefined;
 }
-async function persist(entry: Entry) {
-  const database = await db;
-  const tx = database.transaction(['accounts', 'meta'], 'readwrite');
-  await tx.objectStore('accounts').put(entry, entry.snapshot.document.userId);
-  await tx.objectStore('meta').put(entry.snapshot.document.userId, 'active');
-  await tx.done;
-  return entry;
-}
-async function accept(snapshot: Bootstrap): Promise<Entry> {
-  const previous = await activeEntry();
-  if (previous && previous.snapshot.document.userId !== snapshot.document.userId) {
-    await (await db).delete('accounts', previous.snapshot.document.userId);
-  }
-  return persist({
-    snapshot,
-    queue: previous?.snapshot.document.userId === snapshot.document.userId ? previous.queue : [],
-    conflict:
-      previous?.snapshot.document.userId === snapshot.document.userId
-        ? previous.conflict
-        : undefined,
-  });
-}
-async function refresh(): Promise<Entry> {
+// The read-modify-write transaction also coordinates browsers without Web Locks.
+async function updateEntry(
+  id: string,
+  change: (entry: Entry | undefined) => Entry,
+): Promise<Entry> {
+  const tx = (await db).transaction('accounts', 'readwrite');
+  const value = await tx.store.get(id);
+  let next: Entry;
   try {
-    return await accept(await request<Bootstrap>('/api/bootstrap'));
+    next = change(value ? migrateEntry(value) : undefined);
+    await tx.store.put(next, id);
+    await tx.done;
   } catch (error) {
-    const cached = await activeEntry();
-    if (cached && error instanceof ApiError && (error.code === 'OFFLINE' || error.status === 401)) {
-      return persist({ ...cached, authRequired: error.status === 401 || cached.authRequired });
+    try {
+      tx.abort();
+    } catch {
+      /* Already committed. */
     }
+    await tx.done.catch(() => {});
     throw error;
   }
+  channel?.postMessage(id);
+  return next;
 }
-async function flush(): Promise<Entry> {
-  let entry = await refresh();
-  if (entry.authRequired || entry.conflict) return entry;
-  while (entry.queue.length) {
-    try {
-      const snapshot = await request<Bootstrap>('/api/completions', {
-        method: 'POST',
-        headers: { 'X-Machbar-User': entry.snapshot.document.userId },
-        body: JSON.stringify(entry.queue[0]),
+function initial(snapshot: SyncSnapshot): Entry {
+  return { base: snapshot.document, snapshot: bootstrapFor(snapshot), queue: [] };
+}
+function checkIdentity(id: string) {
+  if (getLocalUserId() !== id) throw new ApiError('ACCOUNT_CHANGED', 409);
+}
+export async function loadEntry(): Promise<Entry> {
+  const id = getLocalUserId();
+  const cached = await readEntry(id);
+  if (cached) return cached;
+  const snapshot = await request<SyncSnapshot>('/api/bootstrap', {
+    headers: { 'X-Machbar-User': id },
+  });
+  checkIdentity(id);
+  if (snapshot.document.userId !== id) throw new ApiError('ACCOUNT_CHANGED', 409);
+  return updateEntry(id, (existing) => existing ?? initial(snapshot));
+}
+const syncing = new Map<string, Promise<Entry>>();
+export function syncEntry(): Promise<Entry> {
+  const id = getLocalUserId();
+  const running = syncing.get(id);
+  if (running) return running;
+  const run = async () => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const captured = await readEntry(id);
+      if (!captured) return loadEntry();
+      if (captured.recovery?.length) return captured;
+      const remote = await request<SyncSnapshot>('/api/bootstrap', {
+        headers: { 'X-Machbar-User': id },
       });
-      // The request was made for the identity verified by refresh. A switched identity must never receive this queue.
-      if (snapshot.document.userId !== entry.snapshot.document.userId)
-        throw new ApiError('ACCOUNT_CHANGED', 409);
-      entry = await persist({ snapshot, queue: entry.queue.slice(1) });
-    } catch (error) {
-      if (error instanceof ApiError) {
-        if (error.code === 'OFFLINE') return entry;
-        if (error.status === 401) return persist({ ...entry, authRequired: true });
-        return persist({ ...entry, conflict: error.code });
+      if (remote.document.userId !== id) throw new ApiError('ACCOUNT_CHANGED', 409);
+      const document = mergeDocuments(captured.base, captured.snapshot.document, remote.document);
+      let acknowledged = remote;
+      try {
+        if (!same(document, remote.document))
+          acknowledged = await request<SyncSnapshot>('/api/sync', {
+            method: 'PUT',
+            headers: { 'X-Machbar-User': id, 'If-Match': String(remote.document.revision) },
+            body: JSON.stringify(document),
+          });
+      } catch (error) {
+        if (error instanceof ApiError && error.code === 'DOCUMENT_CONFLICT') continue;
+        throw error;
       }
+      if (acknowledged.document.userId !== id) throw new ApiError('ACCOUNT_CHANGED', 409);
+      const batch = new Set(captured.queue.map((op) => op.operationId));
+      const next = await updateEntry(id, (latest) => {
+        if (!latest) throw new ApiError('INVALID_IDENTITY', 400);
+        if (latest.base.revision > acknowledged.document.revision) return latest;
+        const queue = latest.queue.filter((op) => !batch.has(op.operationId));
+        const rebased = queue.length
+          ? mergeDocuments(
+              captured.snapshot.document,
+              latest.snapshot.document,
+              acknowledged.document,
+            )
+          : acknowledged.document;
+        return {
+          ...latest,
+          base: acknowledged.document,
+          snapshot: bootstrapFor({ ...acknowledged, document: rebased }),
+          queue,
+          conflict: undefined,
+        };
+      });
+      // Persist acknowledgments only under the captured account, never the new active profile.
+      checkIdentity(id);
+      return next;
+    }
+    throw new ApiError('DOCUMENT_CONFLICT', 409);
+  };
+  const promise = (async () =>
+    navigator.locks
+      ? await navigator.locks.request(`machbar-sync:${id}`, run)
+      : await run())().finally(() => syncing.delete(id));
+  syncing.set(id, promise);
+  return promise;
+}
+export function visibleSnapshot(entry: Entry) {
+  return bootstrapFor(entry.snapshot);
+}
+function locally(change: (entry: Entry) => Entry, expectedUserId?: string): Promise<Entry> {
+  const id = expectedUserId ?? getLocalUserId();
+  return updateEntry(id, (entry) => {
+    checkIdentity(id);
+    if (!entry) throw new ApiError('INVALID_IDENTITY', 400);
+    try {
+      return change(entry);
+    } catch (error) {
+      if (error instanceof DomainError) throw new ApiError(error.code, error.status);
+      if (error instanceof Error && error.name === 'ZodError')
+        throw new ApiError('VALIDATION_ERROR', 400);
       throw error;
     }
-  }
-  return entry;
-}
-export function loadEntry(): Promise<Entry> {
-  return serial(flush);
-}
-export function visibleSnapshot(entry: Entry): Bootstrap {
-  const document = structuredClone(entry.snapshot.document);
-  for (const operation of entry.queue) {
-    try {
-      applyCompletion(document, operation);
-    } catch {
-      // Keep the server snapshot on conflicts; the queue remains reviewable.
-    }
-  }
-  return {
-    ...entry.snapshot,
-    document,
-    today: localDate(document.preferences.timezone),
-    progress: progressFor(document),
-  };
+  });
 }
 export function toggleCompletion(
   type: 'habit' | 'step',
   targetId: string,
   date: string,
   timezone: string,
+  expectedUserId?: string,
 ): Promise<Entry> {
-  return serial(async () => {
-    let entry = await activeEntry();
-    if (!entry) throw new ApiError('AUTH_REQUIRED', 401);
-    if (entry.conflict) throw new ApiError('COMPLETION_CONFLICT', 409);
-    if (entry.authRequired) throw new ApiError('AUTH_REQUIRED', 401);
-    const current =
-      visibleSnapshot(entry).document.completions[completionKey(type, targetId, date)];
+  const operationId = newId();
+  return locally((entry) => {
+    const document = structuredClone(entry.snapshot.document);
+    const current = document.completions[completionKey(type, targetId, date)];
     const operation: CompletionOperation = {
-      operationId: newId(),
+      operationId,
       targetType: type,
       targetId,
       date,
@@ -164,49 +218,85 @@ export function toggleCompletion(
       completed: !current?.completed,
       expectedVersion: current?.version ?? 0,
     };
-    entry = await persist({ ...entry, queue: [...entry.queue, operation] });
-    return entry;
-  });
+    applyCompletion(document, operation);
+    return {
+      ...entry,
+      snapshot: bootstrapFor({ ...entry.snapshot, document }),
+      queue: [...entry.queue, operation],
+    };
+  }, expectedUserId);
 }
 export function mutate(
   path: string,
   method: string,
   body?: unknown,
-  expectedRevision?: number,
+  expectedUserId?: string,
 ): Promise<Entry> {
-  return serial(async () => {
-    const before = await activeEntry();
-    const revision = expectedRevision ?? before?.snapshot.document.revision;
-    const entry = await flush();
-    if (entry.authRequired) throw new ApiError('AUTH_REQUIRED', 401);
-    if (entry.queue.length) throw new ApiError(entry.conflict ?? 'PENDING_CHANGES');
-    if (!navigator.onLine) throw new ApiError('ONLINE_REQUIRED');
-    return accept(
-      await request<Bootstrap>(path, {
-        method,
-        headers: {
-          'If-Match': String(revision ?? entry.snapshot.document.revision),
-          'X-Machbar-User': entry.snapshot.document.userId,
-        },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      }),
-    );
+  const operationId = newId();
+  const now = new Date();
+  return locally((entry) => {
+    const document = structuredClone(entry.snapshot.document);
+    mutateDocument(document, path, method, body, operationId, now);
+    return {
+      ...entry,
+      snapshot: bootstrapFor({ ...entry.snapshot, document }),
+      queue: [...entry.queue, { operationId, path, method, body, at: now.toISOString() }],
+    };
+  }, expectedUserId);
+}
+export async function discardQueue(): Promise<Entry> {
+  const id = getLocalUserId();
+  const snapshot = await request<SyncSnapshot>('/api/bootstrap', {
+    headers: { 'X-Machbar-User': id },
+  });
+  return updateEntry(id, () => {
+    checkIdentity(id);
+    return initial(snapshot);
   });
 }
-export function discardQueue(): Promise<Entry> {
-  return serial(async () => {
-    const snapshot = await request<Bootstrap>('/api/bootstrap');
-    const entry = await accept(snapshot);
-    return persist({ ...entry, queue: [], conflict: undefined });
+export async function switchLocalUser(userId: string): Promise<Entry> {
+  const parsed = localUserIdSchema.safeParse(userId.trim());
+  if (!parsed.success) throw new ApiError('INVALID_IDENTITY', 400);
+  if (!navigator.onLine) throw new ApiError('ONLINE_REQUIRED');
+  const id = getLocalUserId();
+  if ((await readEntry(id))?.queue.length) throw new ApiError('PENDING_CHANGES', 409);
+  const snapshot = await request<SyncSnapshot>('/api/local-user', {
+    method: 'POST',
+    headers: { 'X-Machbar-User': id },
+    body: JSON.stringify({ userId: parsed.data }),
   });
-}
-export function logout(): Promise<void> {
-  return serial(async () => {
-    await request('/auth/logout', { method: 'POST', body: '{}' });
-    const database = await db;
-    const tx = database.transaction(['accounts', 'meta'], 'readwrite');
-    await tx.objectStore('accounts').clear();
-    await tx.objectStore('meta').clear();
+  if (snapshot.document.userId !== parsed.data) throw new ApiError('ACCOUNT_CHANGED', 409);
+  // Recheck after the network request, in the same transaction that changes identity.
+  const tx = (await db).transaction('accounts', 'readwrite');
+  try {
+    const current = await tx.store.get(id);
+    if (current?.queue.length) throw new ApiError('PENDING_CHANGES', 409);
+    checkIdentity(id);
+    const saved = await tx.store.get(parsed.data);
+    const previous = saved ? migrateEntry(saved) : undefined;
+    const next = previous
+      ? {
+          ...previous,
+          base: snapshot.document,
+          snapshot: bootstrapFor({
+            ...snapshot,
+            document: mergeDocuments(previous.base, previous.snapshot.document, snapshot.document),
+          }),
+        }
+      : initial(snapshot);
+    await tx.store.put(next, parsed.data);
     await tx.done;
-  });
+    // No asynchronous gap after the final identity/queue check and storage commit.
+    localStorage.setItem(localUserIdKey, parsed.data);
+    channel?.postMessage(parsed.data);
+    return next;
+  } catch (error) {
+    try {
+      tx.abort();
+    } catch {
+      /* Already committed. */
+    }
+    await tx.done.catch(() => {});
+    throw error;
+  }
 }

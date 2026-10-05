@@ -1,18 +1,20 @@
 import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { randomUUID, createHash } from 'node:crypto';
-import { createUser, DomainError, userDocumentSchema, type UserDocument } from '@machbar/shared';
+import { randomUUID } from 'node:crypto';
+import {
+  createUser,
+  DomainError,
+  localUserIdSchema,
+  userDocumentSchema,
+  type UserDocument,
+} from '@machbar/shared';
 
-export function identityKey(issuer: string, subject: string): string {
-  return createHash('sha256')
-    .update(JSON.stringify([issuer, subject]))
-    .digest('hex');
-}
 export class JsonStore {
   private locks = new Map<string, Promise<unknown>>();
   constructor(public directory: string) {}
   private path(userId: string) {
-    if (!/^(local|[a-f0-9]{64})$/.test(userId)) throw new DomainError('INVALID_IDENTITY');
+    if (!localUserIdSchema.safeParse(userId).success)
+      throw new DomainError('INVALID_IDENTITY', 400);
     return join(this.directory, `${userId}.json`);
   }
   private async serial<T>(userId: string, action: () => Promise<T>): Promise<T> {
@@ -25,7 +27,7 @@ export class JsonStore {
       if (this.locks.get(userId) === next) this.locks.delete(userId);
     }
   }
-  private async load(userId: string): Promise<UserDocument> {
+  private async load(userId: string, requireExisting = false): Promise<UserDocument> {
     try {
       const raw = await readFile(this.path(userId), 'utf8');
       const parsed = userDocumentSchema.safeParse(JSON.parse(raw));
@@ -33,7 +35,10 @@ export class JsonStore {
         throw new DomainError('DATA_CORRUPT', 500);
       return parsed.data;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return createUser(userId);
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (requireExisting) throw new DomainError('USER_NOT_FOUND', 404);
+        return createUser(userId);
+      }
       if (error instanceof SyntaxError) throw new DomainError('DATA_CORRUPT', 500);
       throw error;
     }
@@ -64,6 +69,9 @@ export class JsonStore {
   }
   async read(userId: string): Promise<UserDocument> {
     return this.serial(userId, () => this.load(userId));
+  }
+  async readExisting(userId: string): Promise<UserDocument> {
+    return this.serial(userId, () => this.load(userId, true));
   }
   async update<T>(
     userId: string,

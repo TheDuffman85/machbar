@@ -2,6 +2,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useId,
   useRef,
   useState,
   type FormEvent,
@@ -11,20 +12,23 @@ import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useRegisterSW } from 'virtual:pwa-register/react';
-import { createAvatar } from '@dicebear/core';
-import { newId } from './uuid';
-import * as bottts from '@dicebear/bottts';
+import { SproutArt } from './Plant';
+import { UserIdentity } from './UserIdentity';
+import { localUserIdKey } from './identity';
+import { lockPageScroll } from './scrollLock';
+import { Avatar } from './Avatar';
+import { AvatarEditor, type AvatarValue } from './AvatarEditor';
 import {
   ArrowDown,
   ArrowUp,
   ArrowUpRight,
   Check,
+  ChevronLeft,
   ChevronRight,
   CircleCheck,
   Flame,
   Gift as GiftIcon,
   Leaf,
-  LogOut,
   Moon,
   Plus,
   Settings as SettingsIcon,
@@ -41,14 +45,16 @@ import {
   Lock,
   CalendarDays,
   Heart,
-  MoreHorizontal,
+  QrCode,
   type LucideIcon,
 } from 'lucide-react';
 import {
+  addDays,
   completionKey,
   localDate,
   scheduled,
   scheduleFor,
+  same,
   type Bootstrap,
   type Goal,
   type Habit,
@@ -60,8 +66,10 @@ import {
   ApiError,
   discardQueue,
   loadEntry,
-  logout,
+  syncEntry,
+  subscribeEntries,
   mutate,
+  switchLocalUser,
   toggleCompletion,
   visibleSnapshot,
   type Entry,
@@ -77,23 +85,32 @@ type ModalState =
   | { kind: 'step'; goal: Goal; step?: Step }
   | { kind: 'gift' }
   | { kind: 'install' }
+  | {
+      kind: 'avatar';
+      initial: AvatarValue;
+      draft?: boolean;
+      onApply?: (value: AvatarValue) => void;
+    }
+  | {
+      kind: 'confirm';
+      title: string;
+      message: string;
+      confirmLabel: string;
+      onConfirm: () => void | Promise<unknown>;
+    }
   | null;
 type AppContext = {
   snapshot: Bootstrap;
   entry: Entry;
   online: boolean;
   busy: boolean;
-  action: (
-    path: string,
-    method: string,
-    body?: unknown,
-    expectedRevision?: number,
-  ) => Promise<boolean>;
+  action: (path: string, method: string, body?: unknown) => Promise<boolean>;
   errorCode: string;
   toggle: (type: 'habit' | 'step', id: string, date: string, timezone: string) => Promise<void>;
   setModal: (state: ModalState) => void;
   notify: (message: string) => void;
   install: () => Promise<void>;
+  changeUser: (userId: string) => Promise<void>;
 };
 const Context = createContext<AppContext | null>(null);
 function useApp() {
@@ -124,47 +141,88 @@ function Brand() {
     </div>
   );
 }
-function Avatar({ seed, size = 48 }: { seed: string; size?: number }) {
-  const src = createAvatar(bottts, { seed, backgroundColor: ['e9e9d8'], radius: 50 }).toDataUri();
-  return <img className="avatar" src={src} alt="" width={size} height={size} />;
-}
-function SproutArt({ small = false }: { small?: boolean }) {
+function ProfileMenu() {
+  const { t } = useTranslation();
+  const { snapshot } = useApp();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const location = useLocation();
+  useEffect(() => setOpen(false), [location, snapshot.document.userId]);
+  useEffect(() => {
+    if (!open) return;
+    ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    const dismiss = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', dismiss);
+    return () => document.removeEventListener('pointerdown', dismiss);
+  }, [open]);
   return (
-    <svg className={`sprout-art ${small ? 'small' : ''}`} viewBox="0 0 240 210" aria-hidden="true">
-      <ellipse cx="127" cy="184" rx="68" ry="10" fill="currentColor" opacity=".07" />
-      <circle cx="125" cy="100" r="83" fill="#dfe9d8" opacity=".6" />
-      <path d="M124 125V69" stroke="#527866" strokeWidth="7" strokeLinecap="round" />
-      <path d="M124 95C79 96 75 60 75 47c33-3 53 17 49 48Z" fill="#87a886" />
-      <path d="M124 79c-2-35 21-51 52-50 1 31-17 52-52 50Z" fill="#547c62" />
-      <path d="m85 128 9 45c2 11 61 11 64 0l9-45Z" fill="#e8b9a1" />
-      <rect x="79" y="116" width="93" height="20" rx="8" fill="#efc6b0" />
-      <circle cx="112" cy="147" r="3" fill="#6b5146" />
-      <circle cx="143" cy="147" r="3" fill="#6b5146" />
-      <path
-        d="M121 155q7 7 13 0"
-        stroke="#6b5146"
-        strokeWidth="2.5"
-        fill="none"
-        strokeLinecap="round"
-      />
-      <circle cx="105" cy="155" r="5" fill="#dda18e" opacity=".7" />
-      <circle cx="151" cy="155" r="5" fill="#dda18e" opacity=".7" />
-      <g fill="#c4a863">
-        <path d="m48 85 3-8 3 8 8 3-8 3-3 8-3-8-8-3Z" />
-        <path d="m190 111 2-6 2 6 6 2-6 2-2 6-2-6-6-2Z" />
-      </g>
-      <g className="floating-check">
-        <rect x="178" y="48" width="37" height="37" rx="12" fill="#fff" />
-        <path
-          d="m189 66 5 5 11-13"
-          stroke="#527866"
-          strokeWidth="3"
-          fill="none"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+    <div
+      className="profile-menu"
+      ref={ref}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && open) {
+          event.preventDefault();
+          setOpen(false);
+          trigger.current?.focus();
+        } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+          event.preventDefault();
+          if (!open) {
+            setOpen(true);
+            return;
+          }
+          const items = Array.from(
+            ref.current!.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)'),
+          );
+          const index = items.indexOf(document.activeElement as HTMLElement);
+          const next =
+            event.key === 'Home'
+              ? 0
+              : event.key === 'End'
+                ? items.length - 1
+                : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+          items[next]?.focus();
+        }
+      }}
+    >
+      <button
+        ref={trigger}
+        className="profile-menu-trigger"
+        aria-label={t('profileMenu')}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? 'profile-menu' : undefined}
+        onClick={() => setOpen(!open)}
+      >
+        <Avatar
+          seed={snapshot.document.preferences.avatarSeed}
+          options={snapshot.document.preferences.avatarOptions}
+          size={36}
         />
-      </g>
-    </svg>
+      </button>
+      {open && (
+        <div
+          id="profile-menu"
+          className="profile-menu-panel"
+          role="menu"
+          aria-label={t('profileMenu')}
+        >
+          <NavLink to="/settings" role="menuitem" onClick={() => setOpen(false)}>
+            <SettingsIcon size={17} />
+            {t('settings')}
+          </NavLink>
+          <NavLink to="/user-id" role="menuitem" onClick={() => setOpen(false)}>
+            <QrCode size={17} />
+            {t('userIdentity')}
+          </NavLink>
+        </div>
+      )}
+    </div>
   );
 }
 function Modal({
@@ -172,58 +230,51 @@ function Modal({
   children,
   onClose,
   dismissible = true,
+  role = 'dialog',
+  description,
+  className = '',
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
   dismissible?: boolean;
+  role?: 'dialog' | 'alertdialog';
+  description?: string;
+  className?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const id = useId();
   const { t } = useTranslation();
   useEffect(() => {
     const dialog = ref.current;
-    const { body, documentElement } = document;
-    const scrollX = window.scrollX;
-    const scrollY = window.scrollY;
-    const bodyStyles = {
-      position: body.style.position,
-      top: body.style.top,
-      left: body.style.left,
-      width: body.style.width,
-      overflow: body.style.overflow,
-    };
-    const overflow = documentElement.style.overflow;
-    Object.assign(body.style, {
-      position: 'fixed',
-      top: `-${scrollY}px`,
-      left: `-${scrollX}px`,
-      width: '100%',
-      overflow: 'hidden',
-    });
-    documentElement.style.overflow = 'hidden';
+    const previousFocus = document.activeElement;
+    const unlockScroll = lockPageScroll();
     dialog?.showModal();
+    dialog?.querySelector<HTMLElement>('[data-autofocus]')?.focus();
     return () => {
       dialog?.close();
-      Object.assign(body.style, bodyStyles);
-      documentElement.style.overflow = overflow;
-      window.scrollTo({ left: scrollX, top: scrollY, behavior: 'instant' });
+      unlockScroll();
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected)
+        previousFocus.focus({ preventScroll: true });
     };
   }, []);
   return (
     <dialog
       ref={ref}
-      className="modal"
+      className={`modal ${className}`}
+      role={role}
       onCancel={(e) => {
-        if (!dismissible) e.preventDefault();
-        else onClose();
+        e.preventDefault();
+        if (dismissible) onClose();
       }}
       onClick={(e) => {
         if (dismissible && e.target === e.currentTarget) onClose();
       }}
-      aria-labelledby="modal-title"
+      aria-labelledby={`${id}-title`}
+      aria-describedby={description ? `${id}-description` : undefined}
     >
       <div className="modal-heading">
-        <h2 id="modal-title">{title}</h2>
+        <h2 id={`${id}-title`}>{title}</h2>
         <>
           {dismissible && (
             <button className="icon-button" aria-label={t('close')} onClick={onClose}>
@@ -232,6 +283,11 @@ function Modal({
           )}
         </>
       </div>
+      {description && (
+        <p id={`${id}-description`} className="modal-description">
+          {description}
+        </p>
+      )}
       {children}
     </dialog>
   );
@@ -314,6 +370,8 @@ export function App() {
     theme: Preferences['theme'];
   } | null>(null);
   const syncingRef = useRef(false);
+  const syncRequestedRef = useRef(false);
+  const retryDelayRef = useRef(5_000);
   const {
     needRefresh: [needRefresh],
     updateServiceWorker,
@@ -333,17 +391,26 @@ export function App() {
     setThemePreview(null);
   }, [snapshot?.document.userId]);
   const sync = async () => {
-    if (syncingRef.current) return;
+    if (syncingRef.current) {
+      syncRequestedRef.current = true;
+      return;
+    }
+    syncRequestedRef.current = false;
     syncingRef.current = true;
     setSyncing(true);
     try {
-      queryClient.setQueryData(['machbar'], await loadEntry());
+      const next = await syncEntry();
+      retryDelayRef.current = 5_000;
+      if (next.snapshot.document.userId === localStorage.getItem(localUserIdKey))
+        queryClient.setQueryData(['machbar'], next);
     } catch (e) {
-      if (!(e instanceof ApiError && e.code === 'OFFLINE'))
+      retryDelayRef.current = Math.min(retryDelayRef.current * 2, 60_000);
+      if (!(e instanceof ApiError && (e.code === 'OFFLINE' || e.code === 'ACCOUNT_CHANGED')))
         setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
     } finally {
       syncingRef.current = false;
       setSyncing(false);
+      if (syncRequestedRef.current) void sync();
     }
   };
   useEffect(() => {
@@ -354,19 +421,58 @@ export function App() {
     const foreground = () => {
       if (!document.hidden) void sync();
     };
+    const readLocal = async () => {
+      const next = await loadEntry();
+      if (next.snapshot.document.userId === localStorage.getItem(localUserIdKey))
+        queryClient.setQueryData(['machbar'], next);
+    };
+    const identityChanged = (event: StorageEvent) => {
+      if (event.key === localUserIdKey)
+        void readLocal().then(() => {
+          if (navigator.onLine) void sync();
+        });
+    };
+    const unsubscribe = subscribeEntries(() => {
+      void readLocal();
+    });
+    if (entry && navigator.onLine) void sync();
     window.addEventListener('online', reconnect);
     window.addEventListener('offline', reconnect);
     document.addEventListener('visibilitychange', foreground);
-    const timer = window.setInterval(() => {
-      if (!document.hidden) void sync();
-    }, 60_000);
+    window.addEventListener('storage', identityChanged);
+    // Network status events can be missed after an offline reload. Retry pending
+    // changes promptly while keeping the normal refresh interval for idle users.
+    let timer: number;
+    let cancelled = false;
+    const retry = () => {
+      if (cancelled) return;
+      timer = window.setTimeout(
+        () => {
+          if (!document.hidden && navigator.onLine) void sync().finally(retry);
+          else retry();
+        },
+        entry?.queue.length ? retryDelayRef.current : 60_000,
+      );
+    };
+    retry();
+    // Refresh calendar/progress at midnight in the profile's timezone.
+    const clock = window.setInterval(() => {
+      if (entry)
+        queryClient.setQueryData<Entry>(['machbar'], (current) =>
+          current ? { ...current, snapshot: visibleSnapshot(current) } : current,
+        );
+    }, 30_000);
     return () => {
       window.removeEventListener('online', reconnect);
       window.removeEventListener('offline', reconnect);
       document.removeEventListener('visibilitychange', foreground);
-      window.clearInterval(timer);
+      window.removeEventListener('storage', identityChanged);
+      cancelled = true;
+      window.clearTimeout(timer);
+      window.clearInterval(clock);
+      unsubscribe();
     };
-  }, []);
+  }, [entry?.snapshot.document.userId, entry?.queue.length]);
   useEffect(() => {
     if (toast) {
       const timer = window.setTimeout(() => setToast(''), 3500);
@@ -389,14 +495,15 @@ export function App() {
   useEffect(() => {
     document.title = `Machbar — ${t('tagline')}`;
   }, [t, i18n.language]);
-  async function action(path: string, method: string, body?: unknown, expectedRevision?: number) {
+  async function action(path: string, method: string, body?: unknown) {
     setBusy(true);
     setError('');
     try {
       queryClient.setQueryData(
         ['machbar'],
-        await mutate(path, method, body, expectedRevision ?? snapshot?.document.revision),
+        await mutate(path, method, body, snapshot?.document.userId),
       );
+      if (navigator.onLine) void sync();
       return true;
     } catch (e) {
       setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
@@ -410,24 +517,26 @@ export function App() {
     if (!snapshot) return;
     const completed = snapshot.document.completions[completionKey(type, id, date)]?.completed;
     try {
-      const next = await toggleCompletion(type, id, date, timezone);
+      const next = await toggleCompletion(type, id, date, timezone, snapshot.document.userId);
       queryClient.setQueryData(['machbar'], next);
       if (!completed) setToast(t('celebration'));
-      void sync();
+      if (navigator.onLine) void sync();
     } catch (e) {
       setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
     }
   }
+  async function changeUser(userId: string) {
+    if (busy || !snapshot) return;
+    setBusy(true);
+    try {
+      queryClient.setQueryData(['machbar'], await switchLocalUser(userId));
+      void sync();
+    } finally {
+      setBusy(false);
+    }
+  }
   const notifications = (
     <>
-      {error && (
-        <div className="notice error" role="alert">
-          <span>{t(error)}</span>
-          <button onClick={() => setError('')} aria-label={t('close')}>
-            <X size={18} />
-          </button>
-        </div>
-      )}
       {toast && (
         <div className="toast" role="status">
           <Sparkles size={19} />
@@ -437,33 +546,16 @@ export function App() {
     </>
   );
   if (!entry || !snapshot) {
-    const auth = query.error instanceof ApiError && query.error.status === 401;
     return (
       <main className="welcome-screen">
         <Brand />
         <SproutArt />
-        <h1>{auth ? t('loginTitle') : query.isPending ? t('loading') : t('INTERNAL_ERROR')}</h1>
-        <p>
-          {auth
-            ? t('loginSubtitle')
-            : query.error instanceof ApiError
-              ? t(query.error.code)
-              : t('tagline')}
-        </p>
-        {auth ? (
-          <a className="button primary" href="/auth/login">
-            {t('login')}
-            <ArrowUpRight size={18} />
-          </a>
-        ) : (
-          !query.isPending && (
-            <button className="button primary" onClick={() => void query.refetch()}>
-              {t('retry')}
-            </button>
-          )
-        )}
-        {new URLSearchParams(location.search).has('authError') && (
-          <p role="alert">{t('authFailed')}</p>
+        <h1>{query.isPending ? t('loading') : t('INTERNAL_ERROR')}</h1>
+        <p>{query.error instanceof ApiError ? t(query.error.code) : t('tagline')}</p>
+        {!query.isPending && (
+          <button className="button primary" onClick={() => void query.refetch()}>
+            {t('retry')}
+          </button>
         )}
       </main>
     );
@@ -476,15 +568,19 @@ export function App() {
     busy,
     action,
     toggle,
-    setModal,
+    setModal: (state) => {
+      setModal(state);
+      setError('');
+    },
     notify: setToast,
     install,
+    changeUser,
   };
   const nav = [
     { path: '/', key: 'today', icon: Sun },
+    { path: '/habits', key: 'habits', icon: Leaf },
     { path: '/goals', key: 'goals', icon: Target },
     { path: '/rewards', key: 'rewards', icon: GiftIcon },
-    { path: '/settings', key: 'settings', icon: SettingsIcon },
   ];
   return (
     <Context.Provider value={context}>
@@ -497,24 +593,9 @@ export function App() {
               <NavLink key={key} to={path} end={path === '/'}>
                 <Icon size={21} />
                 <span>{t(key)}</span>
-                {key === 'today' && <span className="nav-dot" />}
               </NavLink>
             ))}
           </nav>
-          <div className="sidebar-bottom">
-            <div className="sidebar-note">
-              <Leaf size={20} />
-              <p>{t('littleNote')}</p>
-            </div>
-            <NavLink className="profile-link" to="/settings">
-              <Avatar seed={preferences!.avatarSeed} size={40} />
-              <div>
-                <strong>{preferences!.name}</strong>
-                <span>{t('level', { level: snapshot.progress.level })}</span>
-              </div>
-              <MoreHorizontal size={18} />
-            </NavLink>
-          </div>
         </aside>
         <div className="main-shell">
           <header className="topbar">
@@ -530,14 +611,12 @@ export function App() {
                 <Sparkles size={15} />
                 {t('level', { level: snapshot.progress.level })}
               </span>
-              <NavLink to="/settings" aria-label={t('settings')}>
-                <Avatar seed={preferences!.avatarSeed} size={36} />
-              </NavLink>
+              <ProfileMenu />
             </div>
           </header>
           <main className="main-content">
             {notifications}
-            {(!online || entry.queue.length > 0 || entry.authRequired || entry.conflict) && (
+            {(!online || entry.queue.length > 0 || entry.conflict) && (
               <div className="notice" role="status">
                 <div>
                   {!online ? (
@@ -548,23 +627,33 @@ export function App() {
                   <span>
                     {entry.conflict
                       ? t('conflict')
-                      : entry.authRequired
-                        ? t('authExpired')
-                        : !online
-                          ? t('offline')
-                          : t(syncing ? 'syncing' : 'queued', { count: entry.queue.length })}
+                      : !online
+                        ? t('offline')
+                        : t(syncing ? 'syncing' : 'queued', { count: entry.queue.length })}
                   </span>
                 </div>
-                {entry.authRequired ? (
-                  <a href="/auth/login">{t('login')}</a>
-                ) : entry.conflict ? (
+                {entry.conflict ? (
                   <button
-                    onClick={() => {
-                      if (window.confirm(t('discardConfirm')))
-                        void discardQueue()
-                          .then((e) => queryClient.setQueryData(['machbar'], e))
-                          .catch(() => setError('OFFLINE'));
-                    }}
+                    disabled={busy || !online}
+                    onClick={() =>
+                      setModal({
+                        kind: 'confirm',
+                        title: t('discard'),
+                        message: t('discardConfirm'),
+                        confirmLabel: t('discard'),
+                        onConfirm: async () => {
+                          setBusy(true);
+                          setError('');
+                          try {
+                            queryClient.setQueryData(['machbar'], await discardQueue());
+                          } catch (e) {
+                            setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
+                          } finally {
+                            setBusy(false);
+                          }
+                        },
+                      })
+                    }
                   >
                     {t('discard')}
                   </button>
@@ -589,11 +678,30 @@ export function App() {
               </div>
             )}
             <Routes>
-              <Route path="/" element={<Today />} />
+              <Route
+                path="/"
+                element={<Today key={`${location.key}:${snapshot.document.userId}`} />}
+              />
               <Route path="/goals" element={<Goals />} />
+              <Route path="/habits" element={<Habits />} />
               <Route path="/rewards" element={<Rewards />} />
               <Route path="/settings" element={<Settings />} />
-              <Route path="*" element={<Today />} />
+              <Route
+                path="/user-id"
+                element={
+                  <UserIdentity
+                    key={snapshot.document.userId}
+                    userId={snapshot.document.userId}
+                    disabled={busy || !online || entry.queue.length > 0}
+                    pending={entry.queue.length > 0}
+                    onSwitch={changeUser}
+                  />
+                }
+              />
+              <Route
+                path="*"
+                element={<Today key={`${location.key}:${snapshot.document.userId}`} />}
+              />
             </Routes>
             <footer className="page-footer">
               <span>machbar.</span>
@@ -610,9 +718,14 @@ export function App() {
             </NavLink>
           ))}
         </nav>
-        {!preferences!.onboarded && (
+        {!preferences!.onboarded && location.pathname !== '/user-id' && (
           <Modal dismissible={false} title={t('onboardingTitle')} onClose={() => {}}>
             <p className="muted">{t('onboardingSubtitle')}</p>
+            {error && (
+              <p className="form-error" role="alert">
+                {t(error)}
+              </p>
+            )}
             <ProfileForm
               key={snapshot.document.userId}
               onboarding
@@ -620,30 +733,74 @@ export function App() {
                 setThemePreview({ userId: snapshot.document.userId, theme })
               }
             />
+            <NavLink className="text-button" to="/user-id">
+              {t('useExistingProfile')}
+            </NavLink>
           </Modal>
         )}
         {modal && (
           <Modal
-            title={t(
-              modal.kind === 'habit'
-                ? modal.habit
-                  ? 'editHabit'
-                  : 'newHabit'
-                : modal.kind === 'goal'
-                  ? modal.goal
-                    ? 'editGoal'
-                    : 'newGoal'
-                  : modal.kind === 'step'
-                    ? modal.step
-                      ? 'editStep'
-                      : 'newStep'
-                    : modal.kind === 'gift'
-                      ? 'newGift'
-                      : 'installTitle',
-            )}
-            onClose={() => setModal(null)}
+            className={modal.kind === 'avatar' ? 'avatar-modal' : ''}
+            dismissible={modal.kind !== 'avatar' || !busy}
+            title={
+              modal.kind === 'confirm'
+                ? modal.title
+                : t(
+                    modal.kind === 'habit'
+                      ? modal.habit
+                        ? 'editHabit'
+                        : 'newHabit'
+                      : modal.kind === 'goal'
+                        ? modal.goal
+                          ? 'editGoal'
+                          : 'newGoal'
+                        : modal.kind === 'step'
+                          ? modal.step
+                            ? 'editStep'
+                            : 'newStep'
+                          : modal.kind === 'avatar'
+                            ? 'editAvatar'
+                            : modal.kind === 'gift'
+                              ? 'newGift'
+                              : 'installTitle',
+                  )
+            }
+            description={
+              modal.kind === 'confirm'
+                ? modal.message
+                : modal.kind === 'avatar'
+                  ? t(modal.draft ? 'avatarDraftHint' : 'avatarEditHint')
+                  : undefined
+            }
+            onClose={() => {
+              setModal(null);
+              setError('');
+            }}
           >
-            {modal.kind === 'install' ? (
+            {error && (
+              <p className="form-error" role="alert">
+                {t(error)}
+              </p>
+            )}
+            {modal.kind === 'avatar' ? (
+              <AvatarForm modal={modal} />
+            ) : modal.kind === 'confirm' ? (
+              <div className="form-actions">
+                <button className="button secondary" data-autofocus onClick={() => setModal(null)}>
+                  {t('cancel')}
+                </button>
+                <button
+                  className="button primary"
+                  disabled={busy}
+                  onClick={() => {
+                    setModal(null);
+                    void modal.onConfirm();
+                  }}
+                >
+                  {modal.confirmLabel}
+                </button>
+              </div>
+            ) : modal.kind === 'install' ? (
               <div className="install-content">
                 <Download size={36} />
                 <p>{t('installHelp')}</p>
@@ -651,6 +808,20 @@ export function App() {
             ) : (
               <ChallengeForm modal={modal} />
             )}
+          </Modal>
+        )}
+        {error && !modal && preferences!.onboarded && (
+          <Modal
+            title={t('alertTitle')}
+            role="alertdialog"
+            description={t(error)}
+            onClose={() => setError('')}
+          >
+            <div className="form-actions">
+              <button className="button primary" data-autofocus onClick={() => setError('')}>
+                {t('ok')}
+              </button>
+            </div>
           </Modal>
         )}
       </div>
@@ -707,7 +878,11 @@ function TaskRow({
   const { snapshot, entry, toggle } = useApp();
   const completed = snapshot.document.completions[completionKey(type, id, date)]?.completed;
   const pending = entry.queue.some(
-    (op) => completionKey(op.targetType, op.targetId, op.date) === completionKey(type, id, date),
+    (op) =>
+      op.targetType &&
+      op.targetId &&
+      op.date &&
+      completionKey(op.targetType, op.targetId, op.date) === completionKey(type, id, date),
   );
   return (
     <div className={`task-row ${completed ? 'checked' : ''}`}>
@@ -727,7 +902,7 @@ function TaskRow({
         className="check-button"
         aria-pressed={!!completed}
         aria-label={t(completed ? 'undoTask' : 'completeTask', { title })}
-        disabled={disabled || !!entry.conflict || !!entry.authRequired}
+        disabled={disabled}
         onClick={() => void toggle(type, id, date, timezone)}
       >
         {completed && <Check size={18} strokeWidth={3} />}
@@ -737,11 +912,18 @@ function TaskRow({
 }
 function Today() {
   const { t, i18n } = useTranslation();
-  const { snapshot, setModal, online } = useApp();
+  const { snapshot, setModal } = useApp();
   const { document: doc, progress } = snapshot;
   const today = localDate(doc.preferences.timezone);
+  const earliestDate = addDays(today, -(snapshot.dailyHistoryDays ?? 3));
   const [selected, setSelected] = useState('');
-  const date = selected || today;
+  const date = selected
+    ? selected < earliestDate
+      ? earliestDate
+      : selected > today
+        ? today
+        : selected
+    : today;
   const habits = doc.habits.filter(
     (h) =>
       (!h.archivedAt ||
@@ -771,10 +953,8 @@ function Today() {
     habits.filter((h) => doc.completions[completionKey('habit', h.id, date)]?.completed).length +
     steps.filter(({ step }) => doc.completions[completionKey('step', step.id, '')]?.completed)
       .length;
-  const dateLabel = new Intl.DateTimeFormat(i18n.language, {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
+  const selectedDateLabel = new Intl.DateTimeFormat(i18n.language, {
+    dateStyle: 'medium',
     timeZone: 'UTC',
   }).format(new Date(`${date}T12:00:00Z`));
   const nextGift = doc.gifts
@@ -787,19 +967,9 @@ function Today() {
   return (
     <>
       <Heading
-        eyebrow={dateLabel}
         title={t('greeting', { name: doc.preferences.name })}
         subtitle={t('todaySubtitle')}
-      >
-        <button
-          className="button primary"
-          disabled={!online}
-          onClick={() => setModal({ kind: 'habit' })}
-        >
-          <Plus size={18} />
-          {t('addChallenge')}
-        </button>
-      </Heading>
+      />
       <section className="daily-hero">
         <div className="hero-copy">
           <span className="small-label">
@@ -814,31 +984,51 @@ function Today() {
           <Bar value={completed} max={total} />
           <div className="hero-micro">{t('littleNote')}</div>
         </div>
-        <SproutArt />
+        <SproutArt key={doc.userId} level={progress.level} />
       </section>
       <div className="dashboard-grid">
         <div className="challenge-column">
+          <div className="history-toolbar">
+            <div className="history-date">
+              <span>{t('logPastDay')}</span>
+              <span className="history-date-field">
+                <CalendarDays size={16} aria-hidden="true" />
+                <time
+                  dateTime={date}
+                  aria-label={t('dateHistory')}
+                  aria-describedby="history-help"
+                  aria-live="polite"
+                >
+                  {selectedDateLabel}
+                </time>
+              </span>
+            </div>
+            <div className="history-actions">
+              <button
+                className="icon-button"
+                aria-label={t('previousDay')}
+                disabled={date <= earliestDate}
+                onClick={() => setSelected(date > earliestDate ? addDays(date, -1) : earliestDate)}
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <button
+                className="icon-button"
+                aria-label={t('nextDay')}
+                disabled={date >= today}
+                onClick={() => setSelected(date < today ? addDays(date, 1) : today)}
+              >
+                <ChevronRight size={18} />
+              </button>
+            </div>
+            <p id="history-help">{t(date < today ? 'pastDayHelp' : 'historyHelp')}</p>
+          </div>
           <div className="section-heading">
             <h2>
               {t('dailyHabits')}
               <span className="count-pill">{habits.length}</span>
             </h2>
-            <label className="date-picker">
-              <CalendarDays size={16} />
-              <input
-                type="date"
-                aria-label={t('dateHistory')}
-                value={date}
-                max={today}
-                onChange={(e) => setSelected(e.target.value)}
-              />
-            </label>
           </div>
-          {selected && selected !== today && (
-            <button className="text-button back-today" onClick={() => setSelected('')}>
-              {t('backToday')}
-            </button>
-          )}
           <div className="panel task-list">
             {habits.length ? (
               habits.map((h) => (
@@ -849,10 +1039,9 @@ function Today() {
                   title={h.title}
                   subtitle={
                     h.description ||
-                    (h.schedules.at(-1)!.weekdays.length === 7
+                    (scheduleFor(h, date)!.weekdays.length === 7
                       ? t('daily')
-                      : h.schedules
-                          .at(-1)!
+                      : scheduleFor(h, date)!
                           .weekdays.map((d) => t(`weekday${d}`))
                           .join(' · '))
                   }
@@ -863,10 +1052,13 @@ function Today() {
                 />
               ))
             ) : (
-              <Empty title={t('noHabits')} description={t('noHabitsDescription')}>
+              <Empty
+                title={t(date < today ? 'noPastHabits' : 'noHabits')}
+                description={t(date < today ? 'noPastHabitsDescription' : 'noHabitsDescription')}
+              >
                 <button
                   className="text-button"
-                  disabled={!online}
+                  disabled={false}
                   onClick={() => setModal({ kind: 'habit' })}
                 >
                   <Plus size={16} />
@@ -962,7 +1154,6 @@ function Today() {
             </h3>
             {doc.habits
               .filter((h) => !h.archivedAt)
-              .slice(0, 3)
               .map((h) => (
                 <div key={h.id}>
                   <span>{h.title}</span>
@@ -982,16 +1173,19 @@ function Today() {
 
 function Goals() {
   const { t } = useTranslation();
-  const { snapshot, setModal, action, online, busy } = useApp();
-  const [tab, setTab] = useState<'goals' | 'habits'>('goals');
+  const { snapshot, setModal, action, busy } = useApp();
   const [archived, setArchived] = useState(false);
   const doc = snapshot.document;
   const today = localDate(doc.preferences.timezone);
-  const goals = doc.goals.filter((g) => !!g.archivedAt === archived),
-    habits = doc.habits.filter((h) => !!h.archivedAt === archived);
-  async function archive(kind: string, id: string, title: string) {
-    if (window.confirm(t('archiveConfirm', { title })))
-      await action(`/api/${kind}/${id}`, 'DELETE');
+  const goals = doc.goals.filter((g) => !!g.archivedAt === archived);
+  function archive(kind: string, id: string, title: string) {
+    setModal({
+      kind: 'confirm',
+      title: t('archive'),
+      message: t('archiveConfirm', { title }),
+      confirmLabel: t('archive'),
+      onConfirm: () => action(`/api/${kind}/${id}`, 'DELETE'),
+    });
   }
   async function move(goal: Goal, index: number, delta: number) {
     const order = goal.steps.map((s) => s.id);
@@ -1003,22 +1197,14 @@ function Goals() {
       <Heading title={t('goals')} subtitle={t('goalsSubtitle')}>
         <button
           className="button primary"
-          disabled={!online || busy}
-          onClick={() => setModal(tab === 'goals' ? { kind: 'goal' } : { kind: 'habit' })}
+          disabled={busy}
+          onClick={() => setModal({ kind: 'goal' })}
         >
           <Plus size={18} />
-          {t(tab === 'goals' ? 'addGoal' : 'addChallenge')}
+          {t('addGoal')}
         </button>
       </Heading>
       <div className="list-toolbar">
-        <div className="tabs">
-          <button className={tab === 'goals' ? 'active' : ''} onClick={() => setTab('goals')}>
-            {t('goals')}
-          </button>
-          <button className={tab === 'habits' ? 'active' : ''} onClick={() => setTab('habits')}>
-            {t('habits')}
-          </button>
-        </div>
         <label className="archive-toggle">
           <input
             type="checkbox"
@@ -1028,199 +1214,231 @@ function Goals() {
           {t('archived')}
         </label>
       </div>
-      {tab === 'goals' ? (
-        <div className="goal-grid">
-          {goals.length ? (
-            goals.map((goal) => {
-              const progress = snapshot.progress.goals[goal.id]!;
-              return (
-                <section className="panel goal-card" key={goal.id}>
-                  <div className="goal-card-heading">
-                    <span className={`task-icon ${goal.color}`}>
-                      <Target size={23} />
-                    </span>
-                    <div>
-                      <h2>{goal.title}</h2>
-                      <p>{goal.description}</p>
-                    </div>
-                    {!archived && (
-                      <div className="card-actions">
-                        <button
-                          className="icon-button"
-                          aria-label={`${t('edit')} ${goal.title}`}
-                          disabled={!online || busy}
-                          onClick={() => setModal({ kind: 'goal', goal })}
-                        >
-                          <Pencil size={16} />
-                        </button>
-                        <button
-                          className="icon-button"
-                          aria-label={`${t('archive')} ${goal.title}`}
-                          disabled={!online || busy}
-                          onClick={() => void archive('goals', goal.id, goal.title)}
-                        >
-                          <Archive size={16} />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  <div className="goal-progress-label">
-                    <span>
-                      {t('goalProgress', { done: progress.completed, total: progress.total })}
-                    </span>
-                    {progress.done && (
-                      <span>
-                        <CircleCheck size={14} />
-                        {t('complete')}
-                      </span>
-                    )}
-                  </div>
-                  <Bar value={progress.completed} max={progress.total} />
-                  <div className="goal-steps">
-                    {goal.steps
-                      .filter((s) => !s.archivedAt)
-                      .map((step) => {
-                        const index = goal.steps.findIndex((s) => s.id === step.id);
-                        return (
-                          <div key={step.id} className="step-container">
-                            <TaskRow
-                              type="step"
-                              id={step.id}
-                              title={step.title}
-                              subtitle={step.date ?? t('undated')}
-                              date={today}
-                              timezone={doc.preferences.timezone}
-                              color={goal.color}
-                              icon={Target}
-                              disabled={
-                                archived && !doc.completions[completionKey('step', step.id, '')]
-                              }
-                            />
-                            {!archived && (
-                              <div className="step-tools">
-                                <button
-                                  className="icon-button"
-                                  aria-label={`${t('moveUp')} ${step.title}`}
-                                  disabled={index === 0 || !online || busy}
-                                  onClick={() => void move(goal, index, -1)}
-                                >
-                                  <ArrowUp size={14} />
-                                </button>
-                                <button
-                                  className="icon-button"
-                                  aria-label={`${t('moveDown')} ${step.title}`}
-                                  disabled={index === goal.steps.length - 1 || !online || busy}
-                                  onClick={() => void move(goal, index, 1)}
-                                >
-                                  <ArrowDown size={14} />
-                                </button>
-                                <button
-                                  className="icon-button"
-                                  aria-label={`${t('edit')} ${step.title}`}
-                                  disabled={!online || busy}
-                                  onClick={() => setModal({ kind: 'step', goal, step })}
-                                >
-                                  <Pencil size={14} />
-                                </button>
-                                <button
-                                  className="icon-button"
-                                  aria-label={`${t('archive')} ${step.title}`}
-                                  disabled={!online || busy}
-                                  onClick={() => void archive('steps', step.id, step.title)}
-                                >
-                                  <Archive size={14} />
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    {!progress.total && <p className="quiet-empty">{t('noSteps')}</p>}
-                  </div>
-                  {!archived && (
-                    <button
-                      className="text-button add-step"
-                      disabled={!online || busy}
-                      onClick={() => setModal({ kind: 'step', goal })}
-                    >
-                      <Plus size={16} />
-                      {t('addStep')}
-                    </button>
-                  )}
-                </section>
-              );
-            })
-          ) : (
-            <div className="panel full-width">
-              <Empty
-                title={t('emptyGoals')}
-                description={t('emptyGoalsDescription')}
-                icon={Target}
-              />
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="habit-grid">
-          {habits.length ? (
-            habits.map((h) => (
-              <section className="panel habit-card" key={h.id}>
+      <div className="goal-grid">
+        {goals.length ? (
+          goals.map((goal) => {
+            const progress = snapshot.progress.goals[goal.id]!;
+            return (
+              <section className="panel goal-card" key={goal.id}>
                 <div className="goal-card-heading">
-                  <span className={`task-icon ${h.color}`}>
-                    <Leaf size={23} />
+                  <span className={`task-icon ${goal.color}`}>
+                    <Target size={23} />
                   </span>
                   <div>
-                    <h2>{h.title}</h2>
-                    <p>{h.description}</p>
+                    <h2>{goal.title}</h2>
+                    <p>{goal.description}</p>
                   </div>
                   {!archived && (
                     <div className="card-actions">
                       <button
                         className="icon-button"
-                        aria-label={`${t('edit')} ${h.title}`}
-                        disabled={!online || busy}
-                        onClick={() => setModal({ kind: 'habit', habit: h })}
+                        aria-label={`${t('edit')} ${goal.title}`}
+                        disabled={busy}
+                        onClick={() => setModal({ kind: 'goal', goal })}
                       >
                         <Pencil size={16} />
                       </button>
                       <button
                         className="icon-button"
-                        aria-label={`${t('archive')} ${h.title}`}
-                        disabled={!online || busy}
-                        onClick={() => void archive('habits', h.id, h.title)}
+                        aria-label={`${t('archive')} ${goal.title}`}
+                        disabled={busy}
+                        onClick={() => void archive('goals', goal.id, goal.title)}
                       >
                         <Archive size={16} />
                       </button>
                     </div>
                   )}
                 </div>
-                <div className="weekday-strip">
-                  {[1, 2, 3, 4, 5, 6, 0].map((day) => (
-                    <span
-                      key={day}
-                      className={h.schedules.at(-1)!.weekdays.includes(day) ? 'selected' : ''}
-                    >
-                      {t(`weekday${day}`)}
-                    </span>
-                  ))}
-                </div>
-                <div className="habit-stats">
+                <div className="goal-progress-label">
                   <span>
-                    <Flame size={16} />
-                    {t('streak', { count: snapshot.progress.habits[h.id]!.current })}
+                    {t('goalProgress', { done: progress.completed, total: progress.total })}
                   </span>
-                  <span>{t('bestStreak', { count: snapshot.progress.habits[h.id]!.best })}</span>
+                  {progress.done && (
+                    <span>
+                      <CircleCheck size={14} />
+                      {t('complete')}
+                    </span>
+                  )}
                 </div>
+                <Bar value={progress.completed} max={progress.total} />
+                <div className="goal-steps">
+                  {goal.steps
+                    .filter((s) => !s.archivedAt)
+                    .map((step) => {
+                      const index = goal.steps.findIndex((s) => s.id === step.id);
+                      return (
+                        <div key={step.id} className="step-container">
+                          <TaskRow
+                            type="step"
+                            id={step.id}
+                            title={step.title}
+                            subtitle={step.date ?? t('undated')}
+                            date={today}
+                            timezone={doc.preferences.timezone}
+                            color={goal.color}
+                            icon={Target}
+                            disabled={
+                              archived && !doc.completions[completionKey('step', step.id, '')]
+                            }
+                          />
+                          {!archived && (
+                            <div className="step-tools">
+                              <button
+                                className="icon-button"
+                                aria-label={`${t('moveUp')} ${step.title}`}
+                                disabled={index === 0 || busy}
+                                onClick={() => void move(goal, index, -1)}
+                              >
+                                <ArrowUp size={14} />
+                              </button>
+                              <button
+                                className="icon-button"
+                                aria-label={`${t('moveDown')} ${step.title}`}
+                                disabled={index === goal.steps.length - 1 || busy}
+                                onClick={() => void move(goal, index, 1)}
+                              >
+                                <ArrowDown size={14} />
+                              </button>
+                              <button
+                                className="icon-button"
+                                aria-label={`${t('edit')} ${step.title}`}
+                                disabled={busy}
+                                onClick={() => setModal({ kind: 'step', goal, step })}
+                              >
+                                <Pencil size={14} />
+                              </button>
+                              <button
+                                className="icon-button"
+                                aria-label={`${t('archive')} ${step.title}`}
+                                disabled={busy}
+                                onClick={() => void archive('steps', step.id, step.title)}
+                              >
+                                <Archive size={14} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  {!progress.total && <p className="quiet-empty">{t('noSteps')}</p>}
+                </div>
+                {!archived && (
+                  <button
+                    className="text-button add-step"
+                    disabled={busy}
+                    onClick={() => setModal({ kind: 'step', goal })}
+                  >
+                    <Plus size={16} />
+                    {t('addStep')}
+                  </button>
+                )}
               </section>
-            ))
-          ) : (
-            <div className="panel full-width">
-              <Empty title={t('noHabits')} description={t('noHabitsDescription')} />
-            </div>
-          )}
-        </div>
-      )}
-      {!online && <p className="offline-help">{t('onlineOnly')}</p>}
+            );
+          })
+        ) : (
+          <div className="panel full-width">
+            <Empty title={t('emptyGoals')} description={t('emptyGoalsDescription')} icon={Target} />
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+function Habits() {
+  const { t } = useTranslation();
+  const { snapshot, setModal, action, busy } = useApp();
+  const [archived, setArchived] = useState(false);
+  const doc = snapshot.document;
+  const habits = doc.habits.filter((h) => !!h.archivedAt === archived);
+  function archive(kind: string, id: string, title: string) {
+    setModal({
+      kind: 'confirm',
+      title: t('archive'),
+      message: t('archiveConfirm', { title }),
+      confirmLabel: t('archive'),
+      onConfirm: () => action(`/api/${kind}/${id}`, 'DELETE'),
+    });
+  }
+  return (
+    <>
+      <Heading title={t('habits')} subtitle={t('habitsSubtitle')}>
+        <button
+          className="button primary"
+          disabled={busy}
+          onClick={() => setModal({ kind: 'habit' })}
+        >
+          <Plus size={18} />
+          {t('addChallenge')}
+        </button>
+      </Heading>
+      <div className="list-toolbar">
+        <label className="archive-toggle">
+          <input
+            type="checkbox"
+            checked={archived}
+            onChange={(e) => setArchived(e.target.checked)}
+          />
+          {t('archived')}
+        </label>
+      </div>
+      <div className="habit-grid">
+        {habits.length ? (
+          habits.map((h) => (
+            <section className="panel habit-card" key={h.id}>
+              <div className="goal-card-heading">
+                <span className={`task-icon ${h.color}`}>
+                  <Leaf size={23} />
+                </span>
+                <div>
+                  <h2>{h.title}</h2>
+                  <p>{h.description}</p>
+                </div>
+                {!archived && (
+                  <div className="card-actions">
+                    <button
+                      className="icon-button"
+                      aria-label={`${t('edit')} ${h.title}`}
+                      disabled={busy}
+                      onClick={() => setModal({ kind: 'habit', habit: h })}
+                    >
+                      <Pencil size={16} />
+                    </button>
+                    <button
+                      className="icon-button"
+                      aria-label={`${t('archive')} ${h.title}`}
+                      disabled={busy}
+                      onClick={() => void archive('habits', h.id, h.title)}
+                    >
+                      <Archive size={16} />
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="weekday-strip">
+                {[1, 2, 3, 4, 5, 6, 0].map((day) => (
+                  <span
+                    key={day}
+                    className={h.schedules.at(-1)!.weekdays.includes(day) ? 'selected' : ''}
+                  >
+                    {t(`weekday${day}`)}
+                  </span>
+                ))}
+              </div>
+              <div className="habit-stats">
+                <span>
+                  <Flame size={16} />
+                  {t('streak', { count: snapshot.progress.habits[h.id]!.current })}
+                </span>
+                <span>{t('bestStreak', { count: snapshot.progress.habits[h.id]!.best })}</span>
+              </div>
+            </section>
+          ))
+        ) : (
+          <div className="panel full-width">
+            <Empty title={t('noHabits')} description={t('noHabitsDescription')} />
+          </div>
+        )}
+      </div>
     </>
   );
 }
@@ -1243,7 +1461,7 @@ function giftDescription(
 }
 function Rewards() {
   const { t } = useTranslation();
-  const { snapshot, setModal, action, online, busy, notify } = useApp();
+  const { snapshot, setModal, action, busy, notify } = useApp();
   const { document: doc, progress } = snapshot;
   const gifts = doc.gifts.filter((g) => !g.archivedAt);
   return (
@@ -1251,7 +1469,7 @@ function Rewards() {
       <Heading title={t('rewards')} subtitle={t('rewardsSubtitle')}>
         <button
           className="button primary"
-          disabled={!online || busy || ![...doc.goals, ...doc.habits].some((i) => !i.archivedAt)}
+          disabled={busy || ![...doc.goals, ...doc.habits].some((i) => !i.archivedAt)}
           onClick={() => setModal({ kind: 'gift' })}
         >
           <Plus size={18} />
@@ -1306,14 +1524,19 @@ function Rewards() {
                 {p.state === 'available' ? (
                   <button
                     className="button primary"
-                    disabled={!online || busy}
-                    onClick={async () => {
-                      if (
-                        window.confirm(t('claimConfirm', { title: gift.title })) &&
-                        (await action(`/api/gifts/${gift.id}/claim`, 'POST', {}))
-                      )
-                        notify(t('giftCelebration'));
-                    }}
+                    disabled={busy}
+                    onClick={() =>
+                      setModal({
+                        kind: 'confirm',
+                        title: t('claimGift'),
+                        message: t('claimConfirm', { title: gift.title }),
+                        confirmLabel: t('claimGift'),
+                        onConfirm: async () => {
+                          if (await action(`/api/gifts/${gift.id}/claim`, 'POST', {}))
+                            notify(t('giftCelebration'));
+                        },
+                      })
+                    }
                   >
                     <GiftIcon size={16} />
                     {t('claimGift')}
@@ -1331,11 +1554,16 @@ function Rewards() {
                 <button
                   className="gift-archive icon-button"
                   aria-label={`${t('archive')} ${gift.title}`}
-                  disabled={!online || busy}
-                  onClick={() => {
-                    if (window.confirm(t('archiveConfirm', { title: gift.title })))
-                      void action(`/api/gifts/${gift.id}`, 'DELETE');
-                  }}
+                  disabled={busy}
+                  onClick={() =>
+                    setModal({
+                      kind: 'confirm',
+                      title: t('archive'),
+                      message: t('archiveConfirm', { title: gift.title }),
+                      confirmLabel: t('archive'),
+                      onConfirm: () => action(`/api/gifts/${gift.id}`, 'DELETE'),
+                    })
+                  }
                 >
                   <Archive size={14} />
                 </button>
@@ -1384,8 +1612,7 @@ function Rewards() {
 
 function Settings() {
   const { t } = useTranslation();
-  const { snapshot, install, entry, notify } = useApp();
-  const queryClient = useQueryClient();
+  const { snapshot, install } = useApp();
   return (
     <>
       <Heading title={t('settings')} subtitle={t('settingsSubtitle')} />
@@ -1411,26 +1638,7 @@ function Settings() {
               <Leaf size={24} />
             </span>
             <h2>{t('selfHosted')}</h2>
-            <p>{t(snapshot.authMode === 'single' ? 'singleMode' : 'oidcMode')}</p>
-            {snapshot.authMode === 'oidc' && (
-              <button
-                className="button secondary"
-                disabled={entry.queue.length > 0}
-                onClick={async () => {
-                  try {
-                    await logout();
-                    queryClient.clear();
-                    window.location.assign('/');
-                  } catch (e) {
-                    notify(t(e instanceof ApiError ? e.code : 'INTERNAL_ERROR'));
-                  }
-                }}
-              >
-                <LogOut size={16} />
-                {t('logout')}
-              </button>
-            )}
-            {entry.queue.length > 0 && <p className="muted">{t('logoutPending')}</p>}
+            <p>{t('browserProfile')}</p>
             <a
               className="text-button credits-link"
               href="/credits.txt"
@@ -1454,13 +1662,8 @@ function ProfileForm({
   onThemePreview?: (theme: Preferences['theme']) => void;
 }) {
   const { t, i18n } = useTranslation();
-  const { snapshot, action, busy, online, notify, errorCode } = useApp();
-  const [baseRevision, setBaseRevision] = useState(snapshot.document.revision);
-  const [submitted, setSubmitted] = useState(false);
-  useEffect(() => {
-    if (submitted && (errorCode === 'DOCUMENT_CONFLICT' || (!busy && !errorCode)))
-      setBaseRevision(snapshot.document.revision);
-  }, [submitted, errorCode, busy, snapshot.document.revision]);
+  const { snapshot, action, busy, notify, setModal } = useApp();
+  const formBaseline = useRef(snapshot.document.preferences);
   const [value, setValue] = useState<Preferences>(() => ({
     ...snapshot.document.preferences,
     ...(onboarding
@@ -1474,25 +1677,54 @@ function ProfileForm({
         }
       : {}),
   }));
+  useEffect(() => {
+    const preferences = snapshot.document.preferences;
+    const baseline = formBaseline.current;
+    setValue((current) => {
+      const updated = { ...current };
+      for (const key of Object.keys(preferences) as Array<keyof Preferences>) {
+        if (same(current[key], baseline[key])) Object.assign(updated, { [key]: preferences[key] });
+      }
+      return updated;
+    });
+    formBaseline.current = preferences;
+  }, [snapshot.document.preferences]);
   const zones = Array.from(new Set([value.timezone, 'UTC', ...Intl.supportedValuesOf('timeZone')]));
   async function submit(e: FormEvent) {
     e.preventDefault();
-    setSubmitted(true);
-    if (await action('/api/preferences', 'PATCH', { ...value, onboarded: true }, baseRevision)) {
+    const updated = { ...value, onboarded: true };
+    const patch = Object.fromEntries(
+      Object.entries(updated).filter(
+        ([key, v]) =>
+          JSON.stringify(v) !== JSON.stringify(formBaseline.current[key as keyof Preferences]),
+      ),
+    );
+    if (await action('/api/preferences', 'PATCH', patch)) {
+      formBaseline.current = updated;
       if (!onboarding) notify(t('preferencesSaved'));
     }
   }
   return (
     <form onSubmit={(e) => void submit(e)} className="profile-form">
       <div className="avatar-editor">
-        <Avatar seed={value.avatarSeed} size={80} />
+        <Avatar seed={value.avatarSeed} options={value.avatarOptions} size={80} />
         <button
           type="button"
           className="button secondary"
-          onClick={() => setValue({ ...value, avatarSeed: newId() })}
+          disabled={busy}
+          onClick={() =>
+            setModal({
+              kind: 'avatar',
+              initial: value,
+              draft: onboarding,
+              onApply: (avatar) => {
+                setValue((current) => ({ ...current, ...avatar }));
+              },
+            })
+          }
         >
-          <RefreshCw size={15} />
-          {t('shuffleAvatar')}
+          <Pencil size={15} />
+          {t('editAvatar')}
         </button>
       </div>
       <label>
@@ -1558,12 +1790,7 @@ function ProfileForm({
           })}
         </div>
       </fieldset>
-      {submitted && errorCode && (
-        <p className="form-error" role="alert">
-          {t(errorCode)}
-        </p>
-      )}
-      <button className="button primary" disabled={busy || !online} type="submit">
+      <button className="button primary" disabled={busy} type="submit">
         {t(onboarding ? 'letsGo' : 'save')}
         <ArrowUpRight size={16} />
       </button>
@@ -1571,14 +1798,38 @@ function ProfileForm({
   );
 }
 
-function ChallengeForm({ modal }: { modal: Exclude<ModalState, null | { kind: 'install' }> }) {
+function AvatarForm({ modal }: { modal: Extract<ModalState, { kind: 'avatar' }> }) {
   const { t } = useTranslation();
-  const { snapshot, action, busy, online, setModal, errorCode } = useApp();
-  const [baseRevision, setBaseRevision] = useState(snapshot.document.revision);
-  const [submitted, setSubmitted] = useState(false);
-  useEffect(() => {
-    if (submitted && errorCode === 'DOCUMENT_CONFLICT') setBaseRevision(snapshot.document.revision);
-  }, [submitted, errorCode, snapshot.document.revision]);
+  const { action, busy, setModal, notify } = useApp();
+  return (
+    <AvatarEditor
+      initial={modal.initial}
+      busy={busy}
+      canSave={true}
+      draft={modal.draft}
+      onCancel={() => setModal(null)}
+      onSave={async (avatar) => {
+        const { avatarSeed, avatarOptions } = avatar;
+        if (
+          modal.draft ||
+          (await action('/api/preferences', 'PATCH', { avatarSeed, avatarOptions }))
+        ) {
+          modal.onApply?.(avatar);
+          setModal(null);
+          if (!modal.draft) notify(t('avatarSaved'));
+        }
+      }}
+    />
+  );
+}
+
+function ChallengeForm({
+  modal,
+}: {
+  modal: Exclude<ModalState, null | { kind: 'install' | 'confirm' | 'avatar' }>;
+}) {
+  const { t } = useTranslation();
+  const { snapshot, action, busy, setModal } = useApp();
   const initial =
     modal.kind === 'habit'
       ? modal.habit
@@ -1613,7 +1864,6 @@ function ChallengeForm({ modal }: { modal: Exclude<ModalState, null | { kind: 'i
   async function submit(e: FormEvent) {
     e.preventDefault();
     setLocalError('');
-    setSubmitted(true);
     let path = '',
       body: unknown,
       method = 'POST';
@@ -1642,7 +1892,21 @@ function ChallengeForm({ modal }: { modal: Exclude<ModalState, null | { kind: 'i
         threshold: targetType === 'goal' ? 1 : threshold,
       };
     }
-    if (await action(path, method, body, baseRevision)) setModal(null);
+    if (method === 'PATCH' && initial) {
+      const baseline = {
+        ...initial,
+        ...(modal.kind === 'habit' && modal.habit
+          ? { weekdays: modal.habit.schedules.at(-1)!.weekdays }
+          : {}),
+      };
+      body = Object.fromEntries(
+        Object.entries(body as Record<string, unknown>).filter(
+          ([key, value]) =>
+            JSON.stringify(value) !== JSON.stringify((baseline as Record<string, unknown>)[key]),
+        ),
+      );
+    }
+    if (await action(path, method, body)) setModal(null);
   }
   return (
     <form className="challenge-form" onSubmit={(e) => void submit(e)}>
@@ -1774,16 +2038,16 @@ function ChallengeForm({ modal }: { modal: Exclude<ModalState, null | { kind: 'i
           )}
         </>
       )}
-      {(localError || (submitted && errorCode)) && (
+      {localError && (
         <p className="form-error" role="alert">
-          {t(localError || errorCode)}
+          {t(localError)}
         </p>
       )}
       <div className="form-actions">
         <button type="button" className="button secondary" onClick={() => setModal(null)}>
           {t('cancel')}
         </button>
-        <button type="submit" className="button primary" disabled={busy || !online}>
+        <button type="submit" className="button primary" disabled={busy}>
           {t(initial ? 'save' : 'create')}
           <Check size={16} />
         </button>
