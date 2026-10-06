@@ -102,9 +102,8 @@ test('saved avatar survives reload, updates settings, and keeps other profile ed
   await dialog.getByLabel('Eyes', { exact: true }).selectOption('wink');
   await dialog.getByRole('button', { name: 'Save avatar', exact: true }).click();
   await expect(dialog).toHaveCount(0);
-  expect((await readSnapshot(page)).document.preferences.name).toBe('Alex');
+  expect((await readSnapshot(page)).document.preferences.name).toBe('New name');
   await expect(page.getByLabel('What should we call you?')).toHaveValue('New name');
-  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect
     .poll(async () => (await readSnapshot(page)).document.preferences.name)
     .toBe('New name');
@@ -115,7 +114,6 @@ test('saved avatar survives reload, updates settings, and keeps other profile ed
   await dialog.getByRole('button', { name: 'Save avatar', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByLabel('What should we call you?')).toHaveValue('Still editing');
-  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect
     .poll(async () => (await readSnapshot(page)).document.preferences.name)
     .toBe('Still editing');

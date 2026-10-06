@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import {
   applyCompletion,
+  completionKey,
   createUser,
   mergeDocuments,
   mutateDocument,
   progressFor,
   same,
+  syncDocumentSchema,
   type UserDocument,
 } from './index.js';
 const now = new Date('2026-10-05T12:00:00Z');
@@ -49,6 +51,50 @@ function complete(doc: UserDocument, completed: boolean) {
   );
 }
 describe('three-way merge', () => {
+  it.each(['local', 'server'] as const)(
+    'keeps %s step archiving through concurrent edits, completions and additions',
+    (side) => {
+      const { base, local, server } = fixture();
+      const id = base.goals[0]!.steps[0]!.id;
+      const archiving = side === 'local' ? local : server;
+      const editing = side === 'local' ? server : local;
+      mutateDocument(archiving, `/api/steps/${id}`, 'DELETE', undefined, randomUUID(), now);
+      editing.goals[0]!.steps[0]!.title = 'Changed on another device';
+      editing.goals[0]!.steps.reverse();
+      applyCompletion(
+        editing,
+        {
+          operationId: randomUUID(),
+          targetType: 'step',
+          targetId: id,
+          date: '2026-10-05',
+          timezone: 'Europe/Berlin',
+          completed: true,
+          expectedVersion: 0,
+        },
+        now,
+      );
+      mutateDocument(
+        editing,
+        `/api/goals/${base.goals[0]!.id}/steps`,
+        'POST',
+        { title: 'New step' },
+        randomUUID(),
+        now,
+      );
+      const result = mergeDocuments(base, local, server);
+      expect(result.goals[0]!.steps.map((s) => s.title)).toEqual([
+        'Plant',
+        'Changed on another device',
+        'New step',
+      ]);
+      expect(result.goals[0]!.steps.find((s) => s.id === id)!.archivedAt).toBe(now.toISOString());
+      expect(result.completions[completionKey('step', id, '')]?.completed).toBe(true);
+      expect(progressFor(result, now).xp).toBe(10);
+      expect(syncDocumentSchema.safeParse(result).success).toBe(true);
+      expect(same(result, mergeDocuments(base, local, result))).toBe(true);
+    },
+  );
   it('unions additions, combines independent fields and uses server values for ties', () => {
     const { base, local, server } = fixture();
     local.habits[0]!.title = 'Local';
@@ -214,6 +260,7 @@ describe('three-way merge', () => {
       from: '2026-10-06',
       weekdays: [1],
       timezone: 'UTC',
+      resetStreak: true,
     });
   });
   it('retains edits made after a sync batch was captured', () => {
@@ -234,6 +281,58 @@ describe('three-way merge', () => {
   });
 });
 describe('local feature mutations', () => {
+  it('archives steps and preserves history, leaving a goal with no active steps completable', () => {
+    const { base } = fixture();
+    const goal = base.goals[0]!;
+    const id = goal.steps[0]!.id;
+    applyCompletion(
+      base,
+      {
+        operationId: randomUUID(),
+        targetType: 'step',
+        targetId: id,
+        date: '2026-10-05',
+        timezone: 'Europe/Berlin',
+        completed: true,
+        expectedVersion: 0,
+      },
+      now,
+    );
+    expect(progressFor(base, now).xp).toBe(10);
+    mutateDocument(base, `/api/steps/${id}`, 'DELETE', undefined, randomUUID(), now);
+    expect(goal.steps.map((s) => s.title)).toEqual(['Shelf', 'Plant']);
+    expect(goal.steps[0]!.archivedAt).toBe(now.toISOString());
+    expect(progressFor(base, now).xp).toBe(10);
+    expect(base.completions[completionKey('step', id, '')]?.completed).toBe(true);
+    // Repeated archiving must preserve the original timestamp and history.
+    mutateDocument(
+      base,
+      `/api/steps/${id}`,
+      'DELETE',
+      undefined,
+      randomUUID(),
+      new Date('2026-10-06T12:00:00Z'),
+    );
+    expect(goal.steps[0]!.archivedAt).toBe(now.toISOString());
+    mutateDocument(base, `/api/steps/${goal.steps[1]!.id}`, 'DELETE', undefined, randomUUID(), now);
+    expect(goal.steps).toHaveLength(2);
+    expect(goal.steps.every((s) => s.archivedAt)).toBe(true);
+    applyCompletion(
+      base,
+      {
+        operationId: randomUUID(),
+        targetType: 'goal',
+        targetId: goal.id,
+        date: '2026-10-05',
+        timezone: 'Europe/Berlin',
+        completed: true,
+        expectedVersion: 0,
+      },
+      now,
+    );
+    expect(progressFor(base, now).goals[goal.id]!.done).toBe(true);
+    expect(syncDocumentSchema.safeParse(base).success).toBe(true);
+  });
   it('partial edits never inject input defaults into untouched fields', () => {
     const { base } = fixture();
     mutateDocument(

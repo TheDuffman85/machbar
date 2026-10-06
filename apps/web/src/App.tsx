@@ -11,6 +11,7 @@ import {
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { SproutArt } from './Plant';
 import { UserIdentity } from './UserIdentity';
@@ -51,11 +52,19 @@ import {
 import {
   addDays,
   completionKey,
+  operationKey,
+  occurrenceFor,
+  isPeriodHabit,
+  alignAnchor,
+  scheduleChangeDate,
+  type HabitSchedule,
+  type Recurrence,
   localDate,
   scheduled,
   scheduleFor,
   same,
   type Bootstrap,
+  type CompletionOperation,
   type Goal,
   type Habit,
   type Step,
@@ -106,7 +115,12 @@ type AppContext = {
   busy: boolean;
   action: (path: string, method: string, body?: unknown) => Promise<boolean>;
   errorCode: string;
-  toggle: (type: 'habit' | 'step', id: string, date: string, timezone: string) => Promise<void>;
+  toggle: (
+    type: CompletionOperation['targetType'],
+    id: string,
+    date: string,
+    timezone: string,
+  ) => Promise<void>;
   setModal: (state: ModalState) => void;
   notify: (message: string) => void;
   install: () => Promise<void>;
@@ -513,9 +527,15 @@ export function App() {
       setBusy(false);
     }
   }
-  async function toggle(type: 'habit' | 'step', id: string, date: string, timezone: string) {
+  async function toggle(
+    type: CompletionOperation['targetType'],
+    id: string,
+    date: string,
+    timezone: string,
+  ) {
     if (!snapshot) return;
-    const completed = snapshot.document.completions[completionKey(type, id, date)]?.completed;
+    const completed =
+      snapshot.document.completions[operationKey(snapshot.document, type, id, date)]?.completed;
     try {
       const next = await toggleCompletion(type, id, date, timezone, snapshot.document.userId);
       queryClient.setQueryData(['machbar'], next);
@@ -585,7 +605,7 @@ export function App() {
   return (
     <Context.Provider value={context}>
       <div className="app-shell">
-        <aside className="sidebar">
+        <aside className="sidebar" aria-label={t('navigation')}>
           <Brand />
           <p className="brand-tagline">{t('tagline')}</p>
           <nav aria-label={t('navigation')}>
@@ -615,68 +635,70 @@ export function App() {
             </div>
           </header>
           <main className="main-content">
-            {notifications}
-            {(!online || entry.queue.length > 0 || entry.conflict) && (
-              <div className="notice" role="status">
-                <div>
-                  {!online ? (
-                    <WifiOff size={18} />
-                  ) : (
-                    <RefreshCw size={18} className={syncing ? 'spin' : ''} />
-                  )}
-                  <span>
-                    {entry.conflict
-                      ? t('conflict')
-                      : !online
-                        ? t('offline')
-                        : t(syncing ? 'syncing' : 'queued', { count: entry.queue.length })}
-                  </span>
-                </div>
-                {entry.conflict ? (
-                  <button
-                    disabled={busy || !online}
-                    onClick={() =>
-                      setModal({
-                        kind: 'confirm',
-                        title: t('discard'),
-                        message: t('discardConfirm'),
-                        confirmLabel: t('discard'),
-                        onConfirm: async () => {
-                          setBusy(true);
-                          setError('');
-                          try {
-                            queryClient.setQueryData(['machbar'], await discardQueue());
-                          } catch (e) {
-                            setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
-                          } finally {
-                            setBusy(false);
-                          }
-                        },
-                      })
-                    }
-                  >
-                    {t('discard')}
-                  </button>
-                ) : (
-                  online && (
-                    <button onClick={() => void sync()} disabled={syncing}>
-                      {t('syncNow')}
+            <div className="notifications">
+              {notifications}
+              {(!online || entry.queue.length > 0 || entry.conflict) && (
+                <div className="notice" role="status">
+                  <div>
+                    {!online ? (
+                      <WifiOff size={18} />
+                    ) : (
+                      <RefreshCw size={18} className={syncing ? 'spin' : ''} />
+                    )}
+                    <span>
+                      {entry.conflict
+                        ? t('conflict')
+                        : !online
+                          ? t('offline')
+                          : t(syncing ? 'syncing' : 'queued', { count: entry.queue.length })}
+                    </span>
+                  </div>
+                  {entry.conflict ? (
+                    <button
+                      disabled={busy || !online}
+                      onClick={() =>
+                        setModal({
+                          kind: 'confirm',
+                          title: t('discard'),
+                          message: t('discardConfirm'),
+                          confirmLabel: t('discard'),
+                          onConfirm: async () => {
+                            setBusy(true);
+                            setError('');
+                            try {
+                              queryClient.setQueryData(['machbar'], await discardQueue());
+                            } catch (e) {
+                              setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
+                            } finally {
+                              setBusy(false);
+                            }
+                          },
+                        })
+                      }
+                    >
+                      {t('discard')}
                     </button>
-                  )
-                )}
-              </div>
-            )}
-            {needRefresh && (
-              <div className="notice">
-                <span>{t(entry.queue.length ? 'updatePending' : 'updateReady')}</span>
-                <button
-                  disabled={entry.queue.length > 0}
-                  onClick={() => void updateServiceWorker(true)}
-                >
-                  {t('update')}
-                </button>
-              </div>
-            )}
+                  ) : (
+                    online && (
+                      <button onClick={() => void sync()} disabled={syncing}>
+                        {t('syncNow')}
+                      </button>
+                    )
+                  )}
+                </div>
+              )}
+              {needRefresh && (
+                <div className="notice">
+                  <span>{t(entry.queue.length ? 'updatePending' : 'updateReady')}</span>
+                  <button
+                    disabled={entry.queue.length > 0}
+                    onClick={() => void updateServiceWorker(true)}
+                  >
+                    {t('update')}
+                  </button>
+                </div>
+              )}
+            </div>
             <Routes>
               <Route
                 path="/"
@@ -703,11 +725,6 @@ export function App() {
                 element={<Today key={`${location.key}:${snapshot.document.userId}`} />}
               />
             </Routes>
-            <footer className="page-footer">
-              <span>machbar.</span>
-              <span>{t('tagline')}</span>
-              <Heart size={13} />
-            </footer>
           </main>
         </div>
         <nav className="mobile-nav" aria-label={t('navigation')}>
@@ -851,6 +868,26 @@ function Heading({
     </div>
   );
 }
+function scheduleLabel(schedule: HabitSchedule, t: TFunction): string {
+  const recurrence = schedule.recurrence;
+  if (!recurrence)
+    return schedule.weekdays.length === 7
+      ? t('daily')
+      : schedule.weekdays.map((d) => t(`weekday${d}`)).join(' · ');
+  if (recurrence.every === 1)
+    return t(
+      recurrence.unit === 'day' ? 'daily' : recurrence.unit === 'week' ? 'weekly' : 'monthly',
+    );
+  return t(
+    recurrence.unit === 'day'
+      ? 'everyDays'
+      : recurrence.unit === 'week'
+        ? 'everyWeeks'
+        : 'everyMonths',
+    { count: recurrence.every },
+  );
+}
+
 function TaskRow({
   type,
   id,
@@ -863,7 +900,7 @@ function TaskRow({
   children,
   disabled = false,
 }: {
-  type: 'habit' | 'step';
+  type: CompletionOperation['targetType'];
   id: string;
   title: string;
   subtitle?: string;
@@ -876,13 +913,15 @@ function TaskRow({
 }) {
   const { t } = useTranslation();
   const { snapshot, entry, toggle } = useApp();
-  const completed = snapshot.document.completions[completionKey(type, id, date)]?.completed;
+  const completed =
+    snapshot.document.completions[operationKey(snapshot.document, type, id, date)]?.completed;
   const pending = entry.queue.some(
     (op) =>
       op.targetType &&
       op.targetId &&
       op.date &&
-      completionKey(op.targetType, op.targetId, op.date) === completionKey(type, id, date),
+      operationKey(snapshot.document, op.targetType, op.targetId, op.date) ===
+        operationKey(snapshot.document, type, id, date),
   );
   return (
     <div className={`task-row ${completed ? 'checked' : ''}`}>
@@ -912,11 +951,12 @@ function TaskRow({
 }
 function Today() {
   const { t, i18n } = useTranslation();
-  const { snapshot, setModal } = useApp();
+  const { snapshot } = useApp();
   const { document: doc, progress } = snapshot;
   const today = localDate(doc.preferences.timezone);
   const earliestDate = addDays(today, -(snapshot.dailyHistoryDays ?? 3));
   const [selected, setSelected] = useState('');
+  const [showAllOptionalSteps, setShowAllOptionalSteps] = useState(false);
   const date = selected
     ? selected < earliestDate
       ? earliestDate
@@ -924,16 +964,13 @@ function Today() {
         ? today
         : selected
     : today;
-  const habits = doc.habits.filter(
-    (h) =>
-      (!h.archivedAt ||
-        date <=
-          localDate(
-            scheduleFor(h, date)?.timezone ?? doc.preferences.timezone,
-            new Date(h.archivedAt),
-          )) &&
-      scheduled(h, date),
-  );
+  const availableHabits = doc.habits.filter((h) => !h.archivedAt && scheduled(h, date));
+  const habits = availableHabits.filter((h) => !isPeriodHabit(scheduleFor(h, date)!));
+  const periodHabits = availableHabits.filter((h) => isPeriodHabit(scheduleFor(h, date)!));
+  const periodWins = periodHabits.filter((h) => {
+    const completion = doc.completions[operationKey(doc, 'habit', h.id, date)];
+    return completion?.completed && completion.date === date;
+  }).length;
   const steps = doc.goals
     .filter((g) => !g.archivedAt)
     .flatMap((g) =>
@@ -948,9 +985,55 @@ function Today() {
         )
         .map((s) => ({ step: s, goal: g })),
     );
+  const optionalStepsByGoal = doc.goals
+    .filter((g) => !g.archivedAt)
+    .map((goal) => ({
+      goal,
+      steps: goal.steps.filter((step) => {
+        if (step.archivedAt || step.date) return false;
+        const completion = doc.completions[completionKey('step', step.id, '')];
+        return completion?.completed ? completion.date === date : date === today;
+      }),
+    }));
+  const allOptionalSteps = optionalStepsByGoal.flatMap(({ goal, steps }) =>
+    steps.map((step) => ({ step, goal })),
+  );
+  const optionalSteps = optionalStepsByGoal.flatMap(({ goal, steps }) => {
+    const nextStep = steps.find(
+      (step) => !doc.completions[completionKey('step', step.id, '')]?.completed,
+    );
+    return steps
+      .filter(
+        (step) =>
+          showAllOptionalSteps ||
+          step === nextStep ||
+          doc.completions[completionKey('step', step.id, '')]?.completed,
+      )
+      .map((step) => ({ step, goal }));
+  });
+  const optionalCompleted = allOptionalSteps.filter(
+    ({ step }) => doc.completions[completionKey('step', step.id, '')]?.completed,
+  ).length;
+  const hasMoreOptionalSteps = optionalStepsByGoal.some(
+    ({ steps }) =>
+      steps.filter((step) => !doc.completions[completionKey('step', step.id, '')]?.completed)
+        .length > 1,
+  );
+  const standaloneGoals = doc.goals.filter((goal) => {
+    if (goal.archivedAt || goal.steps.some((step) => !step.archivedAt)) return false;
+    const completion = doc.completions[completionKey('goal', goal.id, '')];
+    return completion?.completed ? completion.date === date : date === today;
+  });
+  const standaloneCompleted = standaloneGoals.filter(
+    (goal) => progress.goals[goal.id]!.done,
+  ).length;
+  const completedGoals = doc.goals.filter(
+    (goal) => !goal.archivedAt && progress.goals[goal.id]!.completedOn === date,
+  );
   const total = habits.length + steps.length;
   const completed =
-    habits.filter((h) => doc.completions[completionKey('habit', h.id, date)]?.completed).length +
+    habits.filter((h) => doc.completions[operationKey(doc, 'habit', h.id, date)]?.completed)
+      .length +
     steps.filter(({ step }) => doc.completions[completionKey('step', step.id, '')]?.completed)
       .length;
   const selectedDateLabel = new Intl.DateTimeFormat(i18n.language, {
@@ -979,7 +1062,9 @@ function Today() {
           <h2>{t(completed === total && total ? 'allDone' : 'keepGoing')}</h2>
           <p>
             {t('completedOf', { done: completed, total })}
-            <span>{completed * 10} XP</span>
+            <span>
+              {(completed + periodWins + optionalCompleted + standaloneCompleted) * 10} XP
+            </span>
           </p>
           <Bar value={completed} max={total} />
           <div className="hero-micro">{t('littleNote')}</div>
@@ -1023,11 +1108,37 @@ function Today() {
             </div>
             <p id="history-help">{t(date < today ? 'pastDayHelp' : 'historyHelp')}</p>
           </div>
+          {completedGoals.length > 0 && (
+            <section className="completed-goals" aria-labelledby="completed-goals-heading">
+              <div className="section-heading">
+                <h2 id="completed-goals-heading">
+                  <Trophy size={18} aria-hidden="true" />
+                  {t('completedGoals')}
+                  <span className="count-pill">{completedGoals.length}</span>
+                </h2>
+              </div>
+              {completedGoals.map((goal) => (
+                <NavLink className="completed-goal" to="/goals" key={goal.id}>
+                  <span className={`task-icon ${goal.color}`}>
+                    <CircleCheck size={23} aria-hidden="true" />
+                  </span>
+                  <span className="task-copy">
+                    <strong>{goal.title}</strong>
+                    <span>{t('goalCompleted')}</span>
+                  </span>
+                  <ArrowUpRight size={18} aria-hidden="true" />
+                </NavLink>
+              ))}
+            </section>
+          )}
           <div className="section-heading">
             <h2>
               {t('dailyHabits')}
               <span className="count-pill">{habits.length}</span>
             </h2>
+            <NavLink to="/habits" aria-label={t('habits')} className="text-button">
+              <ArrowUpRight size={17} />
+            </NavLink>
           </div>
           <div className="panel task-list">
             {habits.length ? (
@@ -1037,36 +1148,55 @@ function Today() {
                   type="habit"
                   id={h.id}
                   title={h.title}
-                  subtitle={
-                    h.description ||
-                    (scheduleFor(h, date)!.weekdays.length === 7
-                      ? t('daily')
-                      : scheduleFor(h, date)!
-                          .weekdays.map((d) => t(`weekday${d}`))
-                          .join(' · '))
-                  }
+                  subtitle={h.description || scheduleLabel(scheduleFor(h, date)!, t)}
                   date={date}
                   timezone={scheduleFor(h, date)!.timezone}
                   color={h.color}
-                  disabled={!!h.archivedAt && !doc.completions[completionKey('habit', h.id, date)]}
                 />
               ))
             ) : (
               <Empty
                 title={t(date < today ? 'noPastHabits' : 'noHabits')}
                 description={t(date < today ? 'noPastHabitsDescription' : 'noHabitsDescription')}
-              >
-                <button
-                  className="text-button"
-                  disabled={false}
-                  onClick={() => setModal({ kind: 'habit' })}
-                >
-                  <Plus size={16} />
-                  {t('addChallenge')}
-                </button>
-              </Empty>
+              />
             )}
           </div>
+          {periodHabits.length > 0 && (
+            <section className="period-habits">
+              <div className="section-heading">
+                <h2>
+                  {t('periodHabits')}
+                  <span className="count-pill">{periodHabits.length}</span>
+                </h2>
+              </div>
+              <p className="form-hint">{t('periodHabitsHint')}</p>
+              <div className="panel task-list">
+                {periodHabits.map((h) => {
+                  const occurrence = occurrenceFor(h, date)!;
+                  const completion = doc.completions[operationKey(doc, 'habit', h.id, date)];
+                  return (
+                    <TaskRow
+                      key={h.id}
+                      type="habit"
+                      id={h.id}
+                      title={h.title}
+                      subtitle={[
+                        scheduleLabel(occurrence.schedule, t),
+                        t('periodEnds', { date: occurrence.end }),
+                        t('streak', { count: progress.habits[h.id]!.current }),
+                        completion?.completed ? t('completedOn', { date: completion.date }) : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                      date={date}
+                      timezone={occurrence.timezone}
+                      color={h.color}
+                    />
+                  );
+                })}
+              </div>
+            </section>
+          )}
           <div className="section-heading steps-heading">
             <h2>
               {t('goalSteps')}
@@ -1098,8 +1228,59 @@ function Today() {
               </div>
             )}
           </div>
+          {(optionalSteps.length > 0 || standaloneGoals.length > 0) && (
+            <section className="optional-steps" aria-labelledby="optional-steps-heading">
+              <div className="section-heading steps-heading">
+                <h2 id="optional-steps-heading">
+                  {t('optionalSteps')}
+                  <span className="count-pill">
+                    {allOptionalSteps.length + standaloneGoals.length}
+                  </span>
+                </h2>
+              </div>
+              <p className="optional-steps-help">{t('optionalStepsHelp')}</p>
+              <div className="panel task-list" id="optional-step-list">
+                {standaloneGoals.map((goal) => (
+                  <TaskRow
+                    key={goal.id}
+                    type="goal"
+                    id={goal.id}
+                    title={goal.title}
+                    subtitle={t('standaloneGoal')}
+                    date={date}
+                    timezone={doc.preferences.timezone}
+                    color={goal.color}
+                    icon={Target}
+                  />
+                ))}
+                {optionalSteps.map(({ step, goal }) => (
+                  <TaskRow
+                    key={step.id}
+                    type="step"
+                    id={step.id}
+                    title={step.title}
+                    subtitle={goal.title}
+                    date={date}
+                    timezone={doc.preferences.timezone}
+                    color={goal.color}
+                    icon={Target}
+                  />
+                ))}
+              </div>
+              {date === today && hasMoreOptionalSteps && (
+                <button
+                  className="text-button optional-steps-toggle"
+                  aria-expanded={showAllOptionalSteps}
+                  aria-controls="optional-step-list"
+                  onClick={() => setShowAllOptionalSteps((show) => !show)}
+                >
+                  {t(showAllOptionalSteps ? 'showFewerSteps' : 'showAllSteps')}
+                </button>
+              )}
+            </section>
+          )}
         </div>
-        <aside className="dashboard-aside">
+        <aside className="dashboard-aside" aria-label={t('progress')}>
           <section className="panel level-card">
             <div className="level-top">
               <span className="level-icon">
@@ -1173,11 +1354,13 @@ function Today() {
 
 function Goals() {
   const { t } = useTranslation();
-  const { snapshot, setModal, action, busy } = useApp();
+  const { snapshot, entry, setModal, action, toggle, busy } = useApp();
   const [archived, setArchived] = useState(false);
   const doc = snapshot.document;
   const today = localDate(doc.preferences.timezone);
-  const goals = doc.goals.filter((g) => !!g.archivedAt === archived);
+  const goals = doc.goals.filter((g) =>
+    archived ? g.archivedAt || g.steps.some((s) => s.archivedAt) : !g.archivedAt,
+  );
   function archive(kind: string, id: string, title: string) {
     setModal({
       kind: 'confirm',
@@ -1188,8 +1371,11 @@ function Goals() {
     });
   }
   async function move(goal: Goal, index: number, delta: number) {
+    const steps = goal.steps.filter((s) => !s.archivedAt);
     const order = goal.steps.map((s) => s.id);
-    [order[index], order[index + delta]] = [order[index + delta]!, order[index]!];
+    const from = order.indexOf(steps[index]!.id);
+    const to = order.indexOf(steps[index + delta]!.id);
+    [order[from], order[to]] = [order[to]!, order[from]!];
     await action(`/api/goals/${goal.id}/order`, 'PUT', order);
   }
   return (
@@ -1218,6 +1404,13 @@ function Goals() {
         {goals.length ? (
           goals.map((goal) => {
             const progress = snapshot.progress.goals[goal.id]!;
+            const hasSteps = goal.steps.some((step) => !step.archivedAt);
+            const visibleSteps = goal.steps.filter((step) =>
+              archived ? goal.archivedAt || step.archivedAt : !step.archivedAt,
+            );
+            const pending = entry.queue.some(
+              (op) => op.targetType === 'goal' && op.targetId === goal.id,
+            );
             return (
               <section className="panel goal-card" key={goal.id}>
                 <div className="goal-card-heading">
@@ -1226,7 +1419,13 @@ function Goals() {
                   </span>
                   <div>
                     <h2>{goal.title}</h2>
-                    <p>{goal.description}</p>
+                    {goal.description && <p>{goal.description}</p>}
+                    {!hasSteps && progress.done && (
+                      <span className="goal-complete-status">
+                        <CircleCheck size={14} />
+                        {t('complete')}
+                      </span>
+                    )}
                   </div>
                   {!archived && (
                     <div className="card-actions">
@@ -1249,36 +1448,44 @@ function Goals() {
                     </div>
                   )}
                 </div>
-                <div className="goal-progress-label">
-                  <span>
-                    {t('goalProgress', { done: progress.completed, total: progress.total })}
-                  </span>
-                  {progress.done && (
-                    <span>
-                      <CircleCheck size={14} />
-                      {t('complete')}
-                    </span>
-                  )}
-                </div>
-                <Bar value={progress.completed} max={progress.total} />
-                <div className="goal-steps">
-                  {goal.steps
-                    .filter((s) => !s.archivedAt)
-                    .map((step) => {
-                      const index = goal.steps.findIndex((s) => s.id === step.id);
+                {hasSteps && (
+                  <>
+                    <div className="goal-progress-label">
+                      <span>
+                        {t('goalProgress', { done: progress.completed, total: progress.total })}
+                      </span>
+                      {progress.done && (
+                        <span>
+                          <CircleCheck size={14} />
+                          {t('complete')}
+                        </span>
+                      )}
+                    </div>
+                    <Bar value={progress.completed} max={progress.total} />
+                  </>
+                )}
+                {visibleSteps.length > 0 && (
+                  <div className="goal-steps">
+                    {visibleSteps.map((step, index, steps) => {
                       return (
                         <div key={step.id} className="step-container">
                           <TaskRow
                             type="step"
                             id={step.id}
                             title={step.title}
-                            subtitle={step.date ?? t('undated')}
+                            subtitle={[
+                              step.date ?? t('undated'),
+                              step.archivedAt ? t('archived') : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')}
                             date={today}
                             timezone={doc.preferences.timezone}
                             color={goal.color}
                             icon={Target}
                             disabled={
-                              archived && !doc.completions[completionKey('step', step.id, '')]
+                              !!(goal.archivedAt || step.archivedAt) &&
+                              !doc.completions[completionKey('step', step.id, '')]
                             }
                           />
                           {!archived && (
@@ -1294,7 +1501,7 @@ function Goals() {
                               <button
                                 className="icon-button"
                                 aria-label={`${t('moveDown')} ${step.title}`}
-                                disabled={index === goal.steps.length - 1 || busy}
+                                disabled={index === steps.length - 1 || busy}
                                 onClick={() => void move(goal, index, 1)}
                               >
                                 <ArrowDown size={14} />
@@ -1311,26 +1518,50 @@ function Goals() {
                                 className="icon-button"
                                 aria-label={`${t('archive')} ${step.title}`}
                                 disabled={busy}
-                                onClick={() => void archive('steps', step.id, step.title)}
+                                onClick={() => archive('steps', step.id, step.title)}
                               >
-                                <Archive size={14} />
+                                <Archive size={16} />
                               </button>
                             </div>
                           )}
                         </div>
                       );
                     })}
-                  {!progress.total && <p className="quiet-empty">{t('noSteps')}</p>}
-                </div>
-                {!archived && (
-                  <button
-                    className="text-button add-step"
-                    disabled={busy}
-                    onClick={() => setModal({ kind: 'step', goal })}
+                  </div>
+                )}
+                {(!archived || !hasSteps) && (
+                  <div
+                    className={`goal-card-footer ${!hasSteps && progress.done ? 'checked' : ''}`}
                   >
-                    <Plus size={16} />
-                    {t('addStep')}
-                  </button>
+                    {!archived && (
+                      <button
+                        className="text-button add-step"
+                        disabled={busy}
+                        onClick={() => setModal({ kind: 'step', goal })}
+                      >
+                        <Plus size={16} />
+                        {t('addStep')}
+                      </button>
+                    )}
+                    {!hasSteps && (
+                      <button
+                        className="check-button goal-completion"
+                        aria-pressed={progress.done}
+                        aria-label={t(progress.done ? 'undoTask' : 'completeTask', {
+                          title: goal.title,
+                        })}
+                        disabled={archived && !doc.completions[completionKey('goal', goal.id, '')]}
+                        onClick={() =>
+                          void toggle('goal', goal.id, today, doc.preferences.timezone)
+                        }
+                      >
+                        {progress.done && <Check size={18} strokeWidth={3} />}
+                      </button>
+                    )}
+                    {!hasSteps && pending && (
+                      <span className="goal-sync-status">{t('pending')}</span>
+                    )}
+                  </div>
                 )}
               </section>
             );
@@ -1414,16 +1645,25 @@ function Habits() {
                   </div>
                 )}
               </div>
-              <div className="weekday-strip">
-                {[1, 2, 3, 4, 5, 6, 0].map((day) => (
-                  <span
-                    key={day}
-                    className={h.schedules.at(-1)!.weekdays.includes(day) ? 'selected' : ''}
-                  >
-                    {t(`weekday${day}`)}
-                  </span>
-                ))}
-              </div>
+              {h.schedules.at(-1)!.recurrence ? (
+                <p className="habit-interval">{scheduleLabel(h.schedules.at(-1)!, t)}</p>
+              ) : (
+                <div className="weekday-strip">
+                  {[1, 2, 3, 4, 5, 6, 0].map((day) => (
+                    <span
+                      key={day}
+                      className={h.schedules.at(-1)!.weekdays.includes(day) ? 'selected' : ''}
+                    >
+                      {t(`weekday${day}`)}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {h.schedules.at(-1)!.from > localDate(doc.preferences.timezone) && (
+                <p className="form-hint">
+                  {t('scheduleEffective', { date: h.schedules.at(-1)!.from })}
+                </p>
+              )}
               <div className="habit-stats">
                 <span>
                   <Flame size={16} />
@@ -1662,8 +1902,18 @@ function ProfileForm({
   onThemePreview?: (theme: Preferences['theme']) => void;
 }) {
   const { t, i18n } = useTranslation();
-  const { snapshot, action, busy, notify, setModal } = useApp();
+  const { snapshot, action, busy, setModal } = useApp();
   const formBaseline = useRef(snapshot.document.preferences);
+  const pendingNameSave = useRef<{ timer: number; save: () => void } | null>(null);
+  function flushNameSave() {
+    const pending = pendingNameSave.current;
+    if (!pending) return;
+    window.clearTimeout(pending.timer);
+    pendingNameSave.current = null;
+    pending.save();
+  }
+  // Keep the last edit when navigating away before the delay expires.
+  useEffect(() => () => flushNameSave(), []);
   const [value, setValue] = useState<Preferences>(() => ({
     ...snapshot.document.preferences,
     ...(onboarding
@@ -1690,8 +1940,30 @@ function ProfileForm({
     formBaseline.current = preferences;
   }, [snapshot.document.preferences]);
   const zones = Array.from(new Set([value.timezone, 'UTC', ...Intl.supportedValuesOf('timeZone')]));
+  function update(patch: Partial<Preferences>) {
+    setValue((current) => ({ ...current, ...patch }));
+    if (!onboarding) void action('/api/preferences', 'PATCH', patch);
+  }
+  function updateName(name: string) {
+    setValue((current) => ({ ...current, name }));
+    if (pendingNameSave.current) {
+      window.clearTimeout(pendingNameSave.current.timer);
+      pendingNameSave.current = null;
+    }
+    const savedName = name.trim();
+    // An empty name is a temporary editing state, not a valid preference.
+    if (onboarding || !savedName || savedName === formBaseline.current.name) return;
+    pendingNameSave.current = {
+      timer: window.setTimeout(flushNameSave, 500),
+      save: () => {
+        if (savedName !== formBaseline.current.name)
+          void action('/api/preferences', 'PATCH', { name: savedName });
+      },
+    };
+  }
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (!onboarding) return;
     const updated = { ...value, onboarded: true };
     const patch = Object.fromEntries(
       Object.entries(updated).filter(
@@ -1701,7 +1973,6 @@ function ProfileForm({
     );
     if (await action('/api/preferences', 'PATCH', patch)) {
       formBaseline.current = updated;
-      if (!onboarding) notify(t('preferencesSaved'));
     }
   }
   return (
@@ -1711,7 +1982,7 @@ function ProfileForm({
         <button
           type="button"
           className="button secondary"
-          disabled={busy}
+          disabled={onboarding && busy}
           onClick={() =>
             setModal({
               kind: 'avatar',
@@ -1733,7 +2004,16 @@ function ProfileForm({
           required
           maxLength={60}
           value={value.name}
-          onChange={(e) => setValue({ ...value, name: e.target.value })}
+          onChange={(e) => updateName(e.target.value)}
+          onBlur={() => {
+            if (!onboarding) {
+              flushNameSave();
+              setValue((current) => ({
+                ...current,
+                name: current.name.trim() || snapshot.document.preferences.name,
+              }));
+            }
+          }}
           autoComplete="given-name"
         />
       </label>
@@ -1745,7 +2025,7 @@ function ProfileForm({
             value={value.language}
             onChange={(e) => {
               const language = e.target.value as 'en' | 'de';
-              setValue({ ...value, language });
+              update({ language });
               if (onboarding) void i18n.changeLanguage(language);
             }}
           >
@@ -1758,7 +2038,7 @@ function ProfileForm({
           <select
             aria-label={t('timezone')}
             value={value.timezone}
-            onChange={(e) => setValue({ ...value, timezone: e.target.value })}
+            onChange={(e) => update({ timezone: e.target.value })}
           >
             {zones.map((zone) => (
               <option key={zone}>{zone}</option>
@@ -1779,7 +2059,7 @@ function ProfileForm({
                 className={value.theme === theme ? 'selected' : ''}
                 aria-pressed={value.theme === theme}
                 onClick={() => {
-                  setValue({ ...value, theme });
+                  update({ theme });
                   onThemePreview?.(theme);
                 }}
               >
@@ -1790,10 +2070,12 @@ function ProfileForm({
           })}
         </div>
       </fieldset>
-      <button className="button primary" disabled={busy} type="submit">
-        {t(onboarding ? 'letsGo' : 'save')}
-        <ArrowUpRight size={16} />
-      </button>
+      {onboarding && (
+        <button className="button primary" disabled={busy} type="submit">
+          {t('letsGo')}
+          <ArrowUpRight size={16} />
+        </button>
+      )}
     </form>
   );
 }
@@ -1850,6 +2132,29 @@ function ChallengeForm({
       ? modal.habit.schedules.at(-1)!.weekdays
       : [0, 1, 2, 3, 4, 5, 6],
   );
+  const latestSchedule = modal.kind === 'habit' ? modal.habit?.schedules.at(-1) : undefined;
+  const initialRecurrence = latestSchedule?.recurrence;
+  const initialRepeat = initialRecurrence
+    ? initialRecurrence.every === 1
+      ? initialRecurrence.unit === 'day'
+        ? 'custom'
+        : initialRecurrence.unit === 'week'
+          ? 'weekly'
+          : 'monthly'
+      : 'custom'
+    : (latestSchedule?.weekdays.length ?? 7) === 7
+      ? 'daily'
+      : 'weekdays';
+  const [repeat, setRepeat] = useState(initialRepeat);
+  const [every, setEvery] = useState(initialRecurrence?.every ?? 2);
+  const [unit, setUnit] = useState<Recurrence['unit']>(initialRecurrence?.unit ?? 'day');
+  const editBoundary =
+    modal.kind === 'habit' && modal.habit
+      ? scheduleChangeDate(modal.habit)
+      : localDate(snapshot.document.preferences.timezone);
+  const [startDate, setStartDate] = useState(
+    latestSchedule && latestSchedule.from >= editBoundary ? latestSchedule.from : editBoundary,
+  );
   const [date, setDate] = useState(modal.kind === 'step' ? (modal.step?.date ?? '') : '');
   const [targetType, setTargetType] = useState<'goal' | 'habitCount' | 'habitStreak'>(
     snapshot.document.goals.some((g) => !g.archivedAt) ? 'goal' : 'habitCount',
@@ -1868,13 +2173,47 @@ function ChallengeForm({
       body: unknown,
       method = 'POST';
     if (modal.kind === 'habit') {
-      if (!weekdays.length) {
+      if (
+        (repeat === 'weekdays' && !weekdays.length) ||
+        (repeat === 'custom' &&
+          (!Number.isInteger(every) || every < 1 || every > 365 || !startDate))
+      ) {
         setLocalError('VALIDATION_ERROR');
         return;
       }
       path = `/api/habits${modal.habit ? `/${modal.habit.id}` : ''}`;
       method = modal.habit ? 'PATCH' : 'POST';
-      body = { title, description, color, weekdays };
+      const nextUnit: Recurrence['unit'] =
+        repeat === 'weekly' ? 'week' : repeat === 'monthly' ? 'month' : unit;
+      const nextEvery = repeat === 'custom' ? every : 1;
+      const chosenStart = repeat === 'custom' ? startDate : editBoundary;
+      const preserveAnchor =
+        initialRecurrence?.unit === nextUnit &&
+        initialRecurrence.every === nextEvery &&
+        (repeat !== 'custom' ||
+          startDate ===
+            (latestSchedule && latestSchedule.from >= editBoundary
+              ? latestSchedule.from
+              : editBoundary));
+      body = {
+        title,
+        description,
+        color,
+        weekdays: repeat === 'weekdays' ? weekdays : [0, 1, 2, 3, 4, 5, 6],
+        recurrence:
+          repeat === 'daily' || repeat === 'weekdays'
+            ? null
+            : {
+                unit: nextUnit,
+                every: nextEvery,
+                anchor: preserveAnchor
+                  ? initialRecurrence.anchor
+                  : alignAnchor(chosenStart, nextUnit),
+              },
+        ...(repeat === 'custom' && (!modal.habit || startDate !== editBoundary)
+          ? { startDate }
+          : {}),
+      };
     } else if (modal.kind === 'goal') {
       path = `/api/goals${modal.goal ? `/${modal.goal.id}` : ''}`;
       method = modal.goal ? 'PATCH' : 'POST';
@@ -1896,7 +2235,11 @@ function ChallengeForm({
       const baseline = {
         ...initial,
         ...(modal.kind === 'habit' && modal.habit
-          ? { weekdays: modal.habit.schedules.at(-1)!.weekdays }
+          ? {
+              weekdays: modal.habit.schedules.at(-1)!.weekdays,
+              recurrence: modal.habit.schedules.at(-1)!.recurrence ?? null,
+              startDate: modal.habit.schedules.at(-1)!.from,
+            }
           : {}),
       };
       body = Object.fromEntries(
@@ -1960,27 +2303,91 @@ function ChallengeForm({
         </>
       )}
       {modal.kind === 'habit' && (
-        <fieldset>
-          <legend>{t('repeatOn')}</legend>
-          <div className="weekday-buttons">
-            {[1, 2, 3, 4, 5, 6, 0].map((day) => (
-              <button
-                type="button"
-                key={day}
-                className={weekdays.includes(day) ? 'selected' : ''}
-                aria-pressed={weekdays.includes(day)}
-                onClick={() =>
-                  setWeekdays(
-                    weekdays.includes(day) ? weekdays.filter((d) => d !== day) : [...weekdays, day],
-                  )
-                }
-              >
-                {t(`weekday${day}`)}
-              </button>
-            ))}
-          </div>
-          {modal.habit && <p className="form-hint">{t('scheduleChange')}</p>}
-        </fieldset>
+        <>
+          <label>
+            {t('repeatInterval')}
+            <select
+              aria-label={t('repeatInterval')}
+              value={repeat}
+              onChange={(e) => setRepeat(e.target.value)}
+            >
+              <option value="daily">{t('daily')}</option>
+              <option value="weekdays">{t('selectedWeekdays')}</option>
+              <option value="weekly">{t('weekly')}</option>
+              <option value="monthly">{t('monthly')}</option>
+              <option value="custom">{t('customInterval')}</option>
+            </select>
+          </label>
+          {repeat === 'custom' && (
+            <div className="interval-fields">
+              <label>
+                {t('repeatEvery')}
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  max={365}
+                  step={1}
+                  value={every}
+                  onChange={(e) => setEvery(Number(e.target.value))}
+                />
+              </label>
+              <label>
+                {t('intervalUnit')}
+                <select
+                  aria-label={t('intervalUnit')}
+                  value={unit}
+                  onChange={(e) => setUnit(e.target.value as Recurrence['unit'])}
+                >
+                  <option value="day">{t('intervalDays')}</option>
+                  <option value="week">{t('intervalWeeks')}</option>
+                  <option value="month">{t('intervalMonths')}</option>
+                </select>
+              </label>
+              <label>
+                {t('intervalStart')}
+                <input
+                  type="date"
+                  required
+                  min={editBoundary}
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                />
+              </label>
+              <p className="form-hint">{t('intervalAnchorHint')}</p>
+            </div>
+          )}
+          {repeat === 'weekdays' && (
+            <fieldset>
+              <legend>{t('repeatOn')}</legend>
+              <div className="weekday-buttons">
+                {[1, 2, 3, 4, 5, 6, 0].map((day) => (
+                  <button
+                    type="button"
+                    key={day}
+                    className={weekdays.includes(day) ? 'selected' : ''}
+                    aria-pressed={weekdays.includes(day)}
+                    onClick={() =>
+                      setWeekdays(
+                        weekdays.includes(day)
+                          ? weekdays.filter((d) => d !== day)
+                          : [...weekdays, day],
+                      )
+                    }
+                  >
+                    {t(`weekday${day}`)}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+          )}
+          {modal.habit && (
+            <p className="form-hint">
+              {t('scheduleEffective', { date: repeat === 'custom' ? startDate : editBoundary })}{' '}
+              {t('intervalChangeHint')}
+            </p>
+          )}
+        </>
       )}
       {modal.kind === 'step' && (
         <label>

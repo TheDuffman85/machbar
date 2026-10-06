@@ -13,6 +13,13 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Used only by the entrypoint; the application drops to UID/GID 1000:1000.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
     read_only: true
     tmpfs:
       - /tmp

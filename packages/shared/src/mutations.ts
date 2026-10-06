@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import {
-  addDays,
+  alignAnchor,
+  scheduleChangeDate,
+  scheduleRhythm,
+  same,
   DomainError,
   giftInputSchema,
   goalInputSchema,
@@ -32,14 +35,21 @@ export function mutateDocument(
   if (kind === 'preferences' && method === 'PATCH') {
     const input = preferencesSchema.partial().strict().parse(body);
     if (input.timezone && input.timezone !== doc.preferences.timezone) {
-      const from = addDays(localDate(doc.preferences.timezone, now), 1);
       for (const habit of doc.habits.filter((h) => !h.archivedAt)) {
-        const schedule = {
-          from,
-          weekdays: habit.schedules.at(-1)!.weekdays,
-          timezone: input.timezone,
-        };
-        setSchedule(habit.schedules, schedule);
+        if (habit.schedules[0]!.from > localDate(habit.schedules[0]!.timezone, now)) {
+          for (const schedule of habit.schedules) schedule.timezone = input.timezone;
+          continue;
+        }
+        const from = scheduleChangeDate(habit, now);
+        const active = habit.schedules.filter((s) => s.from < from).at(-1) ?? habit.schedules[0]!;
+        const pending = habit.schedules.find((s) => s.from >= from);
+        if (!pending || pending.from > from) {
+          const schedule = { ...active, from, timezone: input.timezone };
+          delete schedule.resetStreak;
+          setSchedule(habit.schedules, schedule);
+        }
+        for (const schedule of habit.schedules.filter((s) => s.from >= from))
+          schedule.timezone = input.timezone;
       }
     }
     Object.assign(doc.preferences, input);
@@ -52,33 +62,64 @@ export function mutateDocument(
     if (!item) throw new DomainError('NOT_FOUND', 404);
     item.archivedAt ??= now.toISOString();
   } else if (kind === 'habits' && method === 'POST' && !id) {
-    const { weekdays, ...input } = habitInputSchema.parse(body);
+    const { weekdays, recurrence, startDate, ...input } = habitInputSchema.parse(body);
+    const today = localDate(doc.preferences.timezone, now);
+    if (startDate && startDate < today) throw new DomainError('VALIDATION_ERROR');
+    const from = startDate ?? today;
     doc.habits.push({
       ...input,
       id: newId,
       archivedAt: null,
       schedules: [
         {
-          from: localDate(doc.preferences.timezone, now),
+          from,
           weekdays,
           timezone: doc.preferences.timezone,
+          ...(recurrence
+            ? {
+                recurrence: {
+                  ...recurrence,
+                  anchor: alignAnchor(recurrence.anchor, recurrence.unit),
+                },
+              }
+            : {}),
         },
       ],
     });
   } else if (kind === 'habits' && method === 'PATCH') {
-    const { weekdays, ...input } = onlySupplied(habitInputSchema.partial().parse(body), body);
+    const { weekdays, recurrence, startDate, ...input } = onlySupplied(
+      habitInputSchema.partial().parse(body),
+      body,
+    );
     const habit = doc.habits.find((h) => h.id === id && !h.archivedAt);
     if (!habit) throw new DomainError('NOT_FOUND', 404);
     Object.assign(habit, input);
     const latest = habit.schedules.at(-1)!;
+    const nextRecurrence = recurrence === undefined ? latest.recurrence : (recurrence ?? undefined);
+    const normalized = nextRecurrence
+      ? { ...nextRecurrence, anchor: alignAnchor(nextRecurrence.anchor, nextRecurrence.unit) }
+      : undefined;
+    const nextWeekdays = weekdays ?? latest.weekdays;
     if (
-      weekdays &&
-      JSON.stringify([...latest.weekdays].sort()) !== JSON.stringify([...weekdays].sort())
+      !same(latest.recurrence, normalized) ||
+      !same([...latest.weekdays].sort(), [...nextWeekdays].sort()) ||
+      startDate !== undefined
     ) {
-      setSchedule(habit.schedules, {
-        from: addDays(localDate(doc.preferences.timezone, now), 1),
-        weekdays,
+      const boundary = scheduleChangeDate(habit, now);
+      if (startDate && startDate < boundary) throw new DomainError('VALIDATION_ERROR');
+      const active = habit.schedules.filter((s) => s.from < boundary).at(-1);
+      const schedule = {
+        from: startDate ?? boundary,
+        weekdays: nextWeekdays,
         timezone: doc.preferences.timezone,
+        ...(normalized ? { recurrence: normalized } : {}),
+      };
+      const resetStreak = active && scheduleRhythm(active) !== scheduleRhythm(schedule);
+      // Replace a pending edit rather than appending a second future schedule.
+      habit.schedules = habit.schedules.filter((s) => s.from < boundary);
+      setSchedule(habit.schedules, {
+        ...schedule,
+        ...(resetStreak ? { resetStreak: true } : {}),
       });
     }
   } else if (kind === 'goals' && method === 'POST' && !id) {

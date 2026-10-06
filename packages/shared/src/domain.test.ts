@@ -10,6 +10,7 @@ import {
   localDate,
   progressFor,
   scheduled,
+  syncDocumentSchema,
   type CompletionOperation,
   type UserDocument,
 } from './index.js';
@@ -152,7 +153,58 @@ describe('progress, streaks and rewards', () => {
     doc.gifts[0]!.claimedAt = now.toISOString();
     expect(progressFor(doc, now).gifts[giftId]!.state).toBe('claimed');
   });
-  it('does not complete empty goals or award duplicate goal XP', () => {
+  it('treats goals without steps as one explicit completion, including rewards and undo', () => {
+    const doc = createUser(randomUUID());
+    const id = randomUUID();
+    const giftId = randomUUID();
+    doc.goals.push({
+      id,
+      title: 'Home',
+      description: '',
+      color: 'sage',
+      archivedAt: null,
+      steps: [],
+    });
+    doc.gifts.push({
+      id: giftId,
+      title: 'Celebrate',
+      targetType: 'goal',
+      targetId: id,
+      threshold: 1,
+      archivedAt: null,
+      claimedAt: null,
+    });
+    expect(progressFor(doc, now).goals[id]).toEqual({
+      completed: 0,
+      total: 1,
+      done: false,
+      completedOn: null,
+    });
+    const op = { ...operation(id, '2026-10-02'), targetType: 'goal' as const };
+    applyCompletion(doc, op, now);
+    applyCompletion(doc, op, now);
+    expect(syncDocumentSchema.safeParse(doc).success).toBe(true);
+    expect(progressFor(doc, now)).toMatchObject({
+      xp: 10,
+      wins: 1,
+      goals: { [id]: { completed: 1, total: 1, done: true, completedOn: '2026-10-02' } },
+      gifts: { [giftId]: { state: 'available' } },
+    });
+    expect(progressFor(doc, now).badges).toContain('first-goal');
+    applyCompletion(doc, { ...operation(id, '2026-10-05', false, 1), targetType: 'goal' }, now);
+    expect(progressFor(doc, now)).toMatchObject({
+      xp: 0,
+      goals: { [id]: { done: false, completedOn: null } },
+      gifts: { [giftId]: { state: 'locked' } },
+    });
+    applyCompletion(doc, { ...operation(id, '2026-10-05', true, 2), targetType: 'goal' }, now);
+    expect(progressFor(doc, now).goals[id]!.completedOn).toBe('2026-10-05');
+    expect(progressFor(doc, now).xp).toBe(10);
+    const invalid = structuredClone(doc);
+    invalid.completions[completionKey('goal', id, '')]!.targetId = randomUUID();
+    expect(syncDocumentSchema.safeParse(invalid).success).toBe(false);
+  });
+  it('requires active steps to be finished and dates the goal on the last completion', () => {
     const doc = createUser(randomUUID()),
       id = randomUUID(),
       stepId = randomUUID();
@@ -170,6 +222,17 @@ describe('progress, streaks and rewards', () => {
     expect(progressFor(doc, now).goals[id]!.done).toBe(true);
     expect(progressFor(doc, now).xp).toBe(10);
     expect(progressFor(doc, now).badges).toContain('first-goal');
+    const anotherId = randomUUID();
+    doc.goals[0]!.steps.unshift({ id: anotherId, title: 'Plant', date: null, archivedAt: null });
+    expect(progressFor(doc, now).goals[id]!.completedOn).toBeNull();
+    expect(() =>
+      applyCompletion(doc, { ...operation(id, '2026-10-05'), targetType: 'goal' }, now),
+    ).toThrow('GOAL_HAS_STEPS');
+    applyCompletion(doc, { ...operation(anotherId, '2026-10-02'), targetType: 'step' }, now);
+    expect(progressFor(doc, now).goals[id]!.completedOn).toBe('2026-10-05');
+    expect(progressFor(doc, now).xp).toBe(20);
+    applyCompletion(doc, { ...operation(stepId, '2026-10-05', false, 1), targetType: 'step' }, now);
+    expect(progressFor(doc, now).goals[id]!.completedOn).toBeNull();
   });
   it('starts at level one and advances each 100 XP', () => {
     const { doc, id } = fixture();

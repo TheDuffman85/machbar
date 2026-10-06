@@ -17,6 +17,7 @@
     "format:check": "prettier --check .",
     "test": "pnpm --filter @machbar/shared build && vitest run",
     "test:e2e": "playwright test",
+    "test:docker": "node scripts/test-docker.mjs",
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
   },
   "devDependencies": {

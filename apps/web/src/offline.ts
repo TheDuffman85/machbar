@@ -4,7 +4,7 @@ import { getLocalUserId, localUserIdKey } from './identity';
 import {
   applyCompletion,
   bootstrapFor,
-  completionKey,
+  operationKey,
   DomainError,
   localUserIdSchema,
   mergeDocuments,
@@ -199,7 +199,7 @@ function locally(change: (entry: Entry) => Entry, expectedUserId?: string): Prom
   });
 }
 export function toggleCompletion(
-  type: 'habit' | 'step',
+  type: CompletionOperation['targetType'],
   targetId: string,
   date: string,
   timezone: string,
@@ -208,7 +208,7 @@ export function toggleCompletion(
   const operationId = newId();
   return locally((entry) => {
     const document = structuredClone(entry.snapshot.document);
-    const current = document.completions[completionKey(type, targetId, date)];
+    const current = document.completions[operationKey(document, type, targetId, date)];
     const operation: CompletionOperation = {
       operationId,
       targetType: type,

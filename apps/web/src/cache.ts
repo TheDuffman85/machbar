@@ -8,7 +8,7 @@ import {
 
 export type PendingMutation = {
   operationId: string;
-  targetType?: 'habit' | 'step';
+  targetType?: CompletionOperation['targetType'];
   targetId?: string;
   date?: string;
   path?: string;

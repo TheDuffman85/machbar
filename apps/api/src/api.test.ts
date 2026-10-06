@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createUser, type SyncSnapshot } from '@machbar/shared';
+import { applyCompletion, createUser, mutateDocument, type SyncSnapshot } from '@machbar/shared';
 import { buildServer } from './server.js';
 import { JsonStore } from './store.js';
 import { readConfig } from './config.js';
@@ -46,6 +46,43 @@ async function sync(
   });
 }
 describe('document synchronization API', () => {
+  it('roundtrips interval schedules and period completions without stripping their metadata', async () => {
+    const doc = (await snapshot()).document;
+    const habitId = randomUUID();
+    const now = new Date('2026-10-06T12:00:00Z');
+    mutateDocument(
+      doc,
+      '/api/habits',
+      'POST',
+      {
+        title: 'Weekly reading',
+        weekdays: [0, 1, 2, 3, 4, 5, 6],
+        recurrence: { unit: 'week', every: 2, anchor: '2026-10-06' },
+      },
+      habitId,
+      now,
+    );
+    applyCompletion(
+      doc,
+      {
+        operationId: randomUUID(),
+        targetType: 'habit',
+        targetId: habitId,
+        date: '2026-10-06',
+        timezone: doc.preferences.timezone,
+        completed: true,
+        expectedVersion: 0,
+      },
+      now,
+    );
+    expect((await sync(doc)).statusCode).toBe(200);
+    const saved = (await snapshot()).document;
+    expect(saved.habits).toEqual(doc.habits);
+    expect(saved.completions).toEqual(doc.completions);
+    expect(
+      JSON.parse(await readFile(join(directory, `${userId}.json`), 'utf8')).completions,
+    ).toEqual(doc.completions);
+  });
   it('bootstraps locally managed profiles without calculated progress or cookies', async () => {
     const response = await app.inject({
       url: '/api/bootstrap',

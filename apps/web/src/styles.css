@@ -704,6 +704,39 @@ h3 {
 .steps-heading {
   margin-top: 29px;
 }
+.optional-steps-help {
+  margin: -5px 0 15px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.optional-steps-toggle {
+  margin-top: 12px;
+}
+.completed-goals {
+  padding: 18px;
+  margin-bottom: 24px;
+  border: 1px solid var(--green);
+  border-radius: 14px;
+  background: var(--green-soft);
+}
+.completed-goals .section-heading {
+  margin-bottom: 8px;
+}
+.completed-goals h2,
+.completed-goal,
+.completed-goal .task-copy > span {
+  color: var(--green);
+}
+.completed-goal {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 6px 0;
+}
+.completed-goal > svg {
+  flex-shrink: 0;
+}
 .quiet-empty {
   display: flex;
   align-items: center;
@@ -865,25 +898,6 @@ h3 {
   border-top: 1px solid var(--line);
   padding-top: 13px;
 }
-.page-footer {
-  display: flex;
-  justify-content: center;
-  gap: 8px;
-  align-items: center;
-  margin-top: 44px;
-  padding: 23px 0;
-  color: var(--muted);
-  font-size: 9px;
-  border-top: 1px solid var(--line);
-}
-.page-footer > span:first-child {
-  font-weight: 700;
-  letter-spacing: -0.4px;
-}
-.page-footer svg {
-  color: #9dac95;
-  margin-left: 3px;
-}
 .empty {
   text-align: center;
   padding: 35px 20px;
@@ -956,12 +970,29 @@ h3 {
   border-color: #715249;
   color: #e2b6a0;
 }
-.toast {
+.notifications {
   position: fixed;
   z-index: 50;
   bottom: 30px;
   left: calc(50% + 116px);
   transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: max-content;
+  max-width: min(600px, calc(100vw - 264px));
+  pointer-events: none;
+}
+.notifications > * {
+  pointer-events: auto;
+}
+.notifications .notice {
+  margin-bottom: 0;
+  flex-wrap: wrap;
+  box-shadow: 0 8px 30px #152e2520;
+}
+.toast {
+  align-self: center;
   background: #344e3e;
   color: white;
   box-shadow: 0 8px 30px #152e2520;
@@ -973,7 +1004,7 @@ h3 {
   align-items: center;
   font-size: 13px;
   width: max-content;
-  max-width: 90vw;
+  max-width: 100%;
   animation: toast-in 0.25s;
 }
 @keyframes toast-in {
@@ -1082,7 +1113,10 @@ h3 {
 }
 .step-container {
   border-bottom: 1px solid var(--line);
-  padding-bottom: 5px;
+  padding-bottom: 12px;
+}
+.step-container > .task-row {
+  border-bottom: 0;
 }
 .step-container:last-child {
   border-bottom: 0;
@@ -1090,15 +1124,37 @@ h3 {
 .step-tools {
   display: flex;
   justify-content: flex-end;
-  gap: 1px;
-  margin-top: -8px;
+  gap: 4px;
+  margin-top: 4px;
 }
 .step-tools .icon-button {
-  min-width: 30px;
-  min-height: 30px;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
 }
-.add-step {
-  margin-top: 13px;
+.goal-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 20px;
+}
+.goal-complete-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  color: var(--green);
+  font-size: 11px;
+}
+.goal-sync-status {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 10px;
+}
+.goal-completion {
+  margin-left: auto;
 }
 .weekday-strip {
   display: flex;
@@ -1766,8 +1822,9 @@ legend {
   .goal-grid {
     grid-template-columns: 1fr;
   }
-  .toast {
+  .notifications {
     left: calc(50% + 102px);
+    max-width: min(600px, calc(100vw - 237px));
   }
 }
 @media (max-width: 900px) {
@@ -2013,15 +2070,13 @@ legend {
     color: var(--green);
     background: var(--green-soft);
   }
-  .toast {
+  .notifications {
     left: 50%;
     bottom: 95px;
-    font-size: 12px;
     max-width: calc(100vw - 30px);
   }
-  .page-footer {
-    margin-top: 30px;
-    padding: 19px 0;
+  .toast {
+    font-size: 12px;
   }
   .stats-row {
     gap: 9px;
@@ -2188,4 +2243,21 @@ legend {
 .dark .streak-card strong,
 .dark .task-copy em {
   color: #d4b38e;
+}
+
+.interval-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 14px;
+}
+.interval-fields > label:nth-child(3),
+.interval-fields > p {
+  grid-column: 1 / -1;
+}
+.period-habits > .form-hint {
+  margin: -4px 0 14px;
+}
+.habit-interval {
+  margin: 18px 0;
+  color: var(--muted);
 }

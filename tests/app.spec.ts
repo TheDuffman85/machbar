@@ -6,6 +6,7 @@ import {
   applyCompletion,
   completionKey,
   type Bootstrap,
+  type Habit,
 } from '../packages/shared/src/index.js';
 const base = 'http://localhost:3100';
 test.beforeEach(async ({ request }) => {
@@ -19,10 +20,12 @@ async function onboard(page: Page, name = 'Alex') {
   await expect(page.getByRole('heading', { name: `Hey, ${name}` })).toBeVisible();
 }
 async function addHabit(page: Page, name = 'Take a little walk') {
+  await page.locator('nav:visible').getByRole('link', { name: 'Habits', exact: true }).click();
   await page.getByRole('button', { name: 'Add a habit', exact: true }).first().click();
   await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill(name);
   await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.locator('nav:visible').getByRole('link', { name: 'Today', exact: true }).click();
   await expect(page.getByRole('button', { name: `Complete ${name}`, exact: true })).toBeVisible();
 }
 async function serverXp(page: Page, xp: number) {
@@ -280,9 +283,8 @@ test('profile menu opens settings, dismisses and exposes profile switching', asy
   await trigger.click();
   await trigger.click();
   await expect(menu).toHaveCount(0);
-  await page.getByLabel('Language', { exact: true }).selectOption('de');
   await page.getByRole('button', { name: 'Dark', exact: true }).click();
-  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await page.getByLabel('Language', { exact: true }).selectOption('de');
   await page.getByRole('button', { name: 'Profilmenü', exact: true }).click();
   await expect(page.getByRole('menuitem', { name: 'Einstellungen', exact: true })).toBeVisible();
   await page.screenshot({ path: `test-results/profile-menu-${test.info().project.name}.png` });
@@ -322,6 +324,10 @@ test('German onboarding is centered, scrolls internally and locks the background
   await dialog.locator('input').fill('Alex');
   await dialog.locator('button[type="submit"]').click();
   await expect(dialog).toHaveCount(0);
+  await page
+    .locator('nav:visible')
+    .getByRole('link', { name: 'Gewohnheiten', exact: true })
+    .click();
   await page.evaluate(() => window.scrollTo(0, 400));
   expect(await page.evaluate(() => window.scrollY)).toBe(400);
   // Opening another dialog must preserve the page position on dismissal.
@@ -404,7 +410,7 @@ test('goals and habits have separate pages and navigation links', async ({ page 
 
 test('goals can be broken into dated and undated steps, reordered, completed and edited', async ({
   page,
-}) => {
+}, testInfo) => {
   await onboard(page);
   await page.goto('/goals');
   await page.getByRole('button', { name: 'New goal', exact: true }).click();
@@ -418,6 +424,30 @@ test('goals can be broken into dated and undated steps, reordered, completed and
     await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
   }
+  const layout = await page.locator('.step-container').evaluateAll((containers) =>
+    containers.map((container) => {
+      const row = container.querySelector('.task-row')!.getBoundingClientRect();
+      const tools = container.querySelector('.step-tools')!.getBoundingClientRect();
+      const bounds = container.getBoundingClientRect();
+      const buttons = [...container.querySelectorAll('.step-tools button')].map((button) =>
+        button.getBoundingClientRect(),
+      );
+      return (
+        tools.top >= row.bottom &&
+        tools.bottom < bounds.bottom &&
+        buttons.every(
+          (button, index) =>
+            button.width >= 44 &&
+            button.height >= 44 &&
+            button.left >= bounds.left &&
+            button.right <= bounds.right &&
+            (index === 0 || button.left >= buttons[index - 1].right),
+        )
+      );
+    }),
+  );
+  expect(layout).toEqual([true, true]);
+  await page.screenshot({ path: testInfo.outputPath('goal-steps.png'), fullPage: true });
   await page.getByRole('button', { name: 'Move up Get a plant', exact: true }).click();
   await expect(page.locator('.goal-steps .task-copy strong').first()).toHaveText('Get a plant');
   await page.getByRole('button', { name: 'Complete Tidy one shelf', exact: true }).click();
@@ -429,14 +459,39 @@ test('goals can be broken into dated and undated steps, reordered, completed and
   await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Get a tiny plant');
   await page.getByRole('dialog').getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(page.getByText('Get a tiny plant', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Archive Get a tiny plant', exact: true }).click();
-  const confirmation = page.getByRole('dialog', { name: 'Archive', exact: true });
-  await confirmation.getByRole('button', { name: 'Archive', exact: true }).click();
+  const archiveButton = page.getByRole('button', { name: 'Archive Get a tiny plant', exact: true });
+  await archiveButton.click();
+  const archiving = page.getByRole('dialog', { name: 'Archive', exact: true });
+  await archiving.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(archiveButton).toBeFocused();
+  await expect(page.getByText('Get a tiny plant', { exact: true })).toBeVisible();
+  await archiveButton.click();
+  await archiving.getByRole('button', { name: 'Archive', exact: true }).click();
   await expect(page.getByText('Get a tiny plant', { exact: true })).toHaveCount(0);
+  const saved = await readSnapshot(page);
+  expect(saved.document.goals[0].steps.map((step) => step.title)).toEqual([
+    'Get a tiny plant',
+    'Tidy one shelf',
+  ]);
+  expect(saved.document.goals[0].steps[0].archivedAt).not.toBeNull();
+  expect(Object.values(saved.document.completions)).toHaveLength(2);
+  await serverXp(page, 20);
+  await page.getByRole('checkbox', { name: 'Archived', exact: true }).check();
+  await expect(page.getByRole('heading', { name: 'A cozy home', exact: true })).toBeVisible();
+  await expect(page.getByText('Get a tiny plant', { exact: true })).toBeVisible();
+  await expect(page.getByText('Tidy one shelf', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.step-tools')).toHaveCount(0);
+  await page.getByRole('checkbox', { name: 'Archived', exact: true }).uncheck();
+  await expect(page.getByText('Get a tiny plant', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Tidy one shelf', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Archive A cozy home', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Archive', exact: true });
   await confirmation.getByRole('button', { name: 'Archive', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'A cozy home', exact: true })).toHaveCount(0);
   await serverXp(page, 20);
+  await page.getByRole('checkbox', { name: 'Archived', exact: true }).check();
+  await expect(page.getByText('Get a tiny plant', { exact: true })).toBeVisible();
+  await expect(page.getByText('Tidy one shelf', { exact: true })).toBeVisible();
 });
 test('gift unlock, claiming and achievements', async ({ page }) => {
   await onboard(page);
@@ -521,6 +576,115 @@ test('archive confirmations cancel safely, restore focus and preserve progress',
   expect(nativeDialogs).toEqual([]);
 });
 
+test('the day page hides archived habits, goals and steps on today and past days', async ({
+  page,
+}) => {
+  await onboard(page);
+  const { document: doc, today } = await readSnapshot(page);
+  const yesterday = addDays(today, -1);
+  const habit: Habit = {
+    id: crypto.randomUUID(),
+    title: 'Active habit',
+    description: '',
+    color: 'sage',
+    schedules: [
+      {
+        from: addDays(today, -3),
+        weekdays: [0, 1, 2, 3, 4, 5, 6],
+        timezone: doc.preferences.timezone,
+      },
+    ],
+    archivedAt: null,
+  };
+  const archivedHabit = { ...habit, id: crypto.randomUUID(), title: 'Archived habit' };
+  const uncheckedHabit = { ...habit, id: crypto.randomUUID(), title: 'Archived unchecked habit' };
+  doc.habits = [habit, archivedHabit, uncheckedHabit];
+  const step = (title: string, date: string | null) => ({
+    id: crypto.randomUUID(),
+    title,
+    date,
+    archivedAt: null as string | null,
+  });
+  const goal = (title: string, steps: ReturnType<typeof step>[] = []) => ({
+    id: crypto.randomUUID(),
+    title,
+    description: '',
+    color: 'sage' as const,
+    steps,
+    archivedAt: null as string | null,
+  });
+  const archivedDueStep = step('Archived dated step', yesterday);
+  const archivedOptionalStep = step('Archived undated step', null);
+  const activeGoal = goal('Active goal', [
+    step('Active dated step', yesterday),
+    step('Active undated step', null),
+    archivedDueStep,
+    archivedOptionalStep,
+  ]);
+  const archivedGoal = goal('Archived goal', [
+    step('Dated step of archived goal', yesterday),
+    step('Undated step of archived goal', null),
+  ]);
+  const archivedTodayGoal = goal('Archived completed goal');
+  const archivedPastGoal = goal('Archived past completed goal');
+  doc.goals = [activeGoal, archivedGoal, archivedTodayGoal, archivedPastGoal];
+  for (const [type, id, date] of [
+    ['habit', archivedHabit.id, today],
+    ['habit', archivedHabit.id, yesterday],
+    ['step', archivedDueStep.id, today],
+    ['step', archivedOptionalStep.id, yesterday],
+    ['goal', archivedTodayGoal.id, today],
+    ['goal', archivedPastGoal.id, yesterday],
+  ] as const) {
+    applyCompletion(doc, {
+      operationId: crypto.randomUUID(),
+      targetType: type,
+      targetId: id,
+      date,
+      timezone: doc.preferences.timezone,
+      completed: true,
+      expectedVersion: 0,
+    });
+  }
+  const archivedItems = [
+    archivedHabit,
+    uncheckedHabit,
+    archivedDueStep,
+    archivedOptionalStep,
+    archivedGoal,
+    archivedTodayGoal,
+    archivedPastGoal,
+  ];
+  for (const item of archivedItems) item.archivedAt = new Date().toISOString();
+  expect(
+    (await page.request.post('/test/seed', { headers: { origin: base }, data: doc })).ok(),
+  ).toBe(true);
+  await page.reload();
+  for (const date of [today, yesterday]) {
+    await expect(page.getByLabel('Selected date', { exact: true })).toHaveAttribute(
+      'datetime',
+      date,
+    );
+    for (const item of [...archivedItems, ...archivedGoal.steps]) {
+      await expect(page.getByText(item.title, { exact: true })).toHaveCount(0);
+    }
+    await expect(
+      page.getByRole('button', { name: 'Complete Active habit', exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Complete Active dated step', exact: true }),
+    ).toBeVisible();
+    await expect(page.locator('.daily-hero')).toContainText('0 of 2 challenges');
+    if (date === today) {
+      await expect(
+        page.getByRole('button', { name: 'Complete Active undated step', exact: true }),
+      ).toBeVisible();
+      await page.getByRole('button', { name: 'Previous day', exact: true }).click();
+    }
+  }
+  expect((await readSnapshot(page)).progress.xp).toBe(60);
+});
+
 test('sync errors preserve locally archived data and show a dismissible alert', async ({
   page,
 }) => {
@@ -569,12 +733,97 @@ test('offline reload preserves queued checkoffs and reconnect syncs exactly once
   await page.getByRole('button', { name: 'Undo Take a little walk', exact: true }).click();
   await serverXp(page, 0);
 });
+test('settings apply immediately and persist without a save button', async ({ page }) => {
+  await onboard(page);
+  await page.goto('/settings');
+  await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toHaveCount(0);
+  const name = page.getByLabel('What should we call you?');
+  await name.clear();
+  await page.getByRole('button', { name: 'Dark', exact: true }).click();
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  await expect(name).toHaveValue('Alex');
+  await name.fill('Sam');
+  await name.pressSequentially(' Taylor');
+  await page.getByLabel('Timezone', { exact: true }).selectOption('UTC');
+  await expect
+    .poll(async () => (await readSnapshot(page)).document.preferences)
+    .toMatchObject({ name: 'Sam Taylor', timezone: 'UTC', theme: 'dark' });
+  await name.press('Enter');
+  await page.reload();
+  await expect(name).toHaveValue('Sam Taylor');
+  await expect(page.getByLabel('Timezone', { exact: true })).toHaveValue('UTC');
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  await page.getByRole('button', { name: 'Light', exact: true }).click();
+  await expect(page.locator('html')).not.toHaveClass(/dark/);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.getByRole('button', { name: 'Follow system', exact: true }).click();
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('html')).not.toHaveClass(/dark/);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+test('name saves once after typing pauses and flushes on blur', async ({ page, context }) => {
+  await onboard(page);
+  await readSnapshot(page);
+  await page.goto('/settings');
+  await context.setOffline(true);
+  const now = new Date();
+  await page.clock.install({ time: now });
+  // Installing the clock takes real time; pause ahead of it, never in the past.
+  await page.clock.pauseAt(new Date(now.getTime() + 1000));
+  const name = page.getByLabel('What should we call you?');
+  await name.fill('Sam');
+  await page.clock.runFor(400);
+  expect((await localEntry(page)).queue).toHaveLength(0);
+  await name.pressSequentially(' Taylor');
+  await page.clock.runFor(400);
+  expect((await localEntry(page)).queue).toHaveLength(0);
+  await page.clock.runFor(100);
+  await expect.poll(async () => (await localEntry(page)).queue.length).toBe(1);
+  expect((await localEntry(page)).snapshot.document.preferences.name).toBe('Sam Taylor');
+  await name.fill('Sam Smith');
+  await page.getByRole('button', { name: 'Dark', exact: true }).click();
+  await expect
+    .poll(async () => (await localEntry(page)).snapshot.document.preferences)
+    .toMatchObject({ name: 'Sam Smith', theme: 'dark' });
+  await page.clock.runFor(500);
+  expect((await localEntry(page)).queue).toHaveLength(3);
+  await name.fill('   ');
+  await page.clock.runFor(500);
+  expect((await localEntry(page)).queue).toHaveLength(3);
+  await name.fill('Sam Smith');
+  await page.clock.runFor(500);
+  expect((await localEntry(page)).queue).toHaveLength(3);
+});
+test('settings save automatically offline and sync on reconnect', async ({ page, context }) => {
+  await onboard(page);
+  await serviceWorker(page);
+  await readSnapshot(page);
+  await page.goto('/settings');
+  await context.setOffline(true);
+  await page.getByLabel('What should we call you?').fill('Offline Sam');
+  await page.getByLabel('Timezone', { exact: true }).selectOption('UTC');
+  await page.getByRole('button', { name: 'Dark', exact: true }).click();
+  await page.getByLabel('Language', { exact: true }).selectOption('de');
+  const preferences = { name: 'Offline Sam', timezone: 'UTC', theme: 'dark', language: 'de' };
+  await expect
+    .poll(async () => (await localEntry(page)).snapshot.document.preferences)
+    .toMatchObject(preferences);
+  expect((await localEntry(page)).queue.length).toBeGreaterThan(0);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Einstellungen', exact: true })).toBeVisible();
+  await expect(page.locator('.profile-form input')).toHaveValue('Offline Sam');
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  await context.setOffline(false);
+  await expect
+    .poll(async () => (await readSnapshot(page)).document.preferences)
+    .toMatchObject(preferences);
+});
 test('English/German, dark mode and reduced motion', async ({ page }) => {
   await onboard(page);
   await page.goto('/settings');
-  await page.getByLabel('Language', { exact: true }).selectOption('de');
   await page.getByRole('button', { name: 'Dark', exact: true }).click();
-  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await page.getByLabel('Language', { exact: true }).selectOption('de');
   await expect(page.getByRole('heading', { name: 'Einstellungen', exact: true })).toBeVisible();
   await expect(page.locator('html')).toHaveClass(/dark/);
   await expect(page.locator('html')).toHaveAttribute('lang', 'de');
@@ -655,7 +904,6 @@ test('layout and accessible controls', async ({ page }) => {
     ).toEqual([]);
   }
   await page.getByRole('button', { name: 'Dark', exact: true }).click();
-  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(page.locator('html')).toHaveClass(/dark/);
   for (const route of ['/', '/goals', '/habits', '/rewards', '/settings']) {
     await page.goto(route);

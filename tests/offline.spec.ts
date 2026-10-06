@@ -3,6 +3,7 @@ import { localEntry, readSnapshot, writeSnapshot } from './helpers.js';
 import { mutateDocument } from '../packages/shared/src/index.js';
 const base = 'http://localhost:3100';
 test.beforeEach(async ({ request }) => {
+  test.setTimeout(60000);
   await request.post(`${base}/test/reset`, { headers: { origin: base } });
 });
 async function ready(page: Page, onboarding = true) {
@@ -24,10 +25,15 @@ async function ready(page: Page, onboarding = true) {
   });
 }
 async function create(page: Page, button: string, title: string) {
+  const returnToday = button === 'Add a habit' && new URL(page.url()).pathname === '/';
+  if (returnToday)
+    await page.locator('nav:visible').getByRole('link', { name: 'Habits', exact: true }).click();
   await page.getByRole('button', { name: button, exact: true }).first().click();
   await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill(title);
   await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  if (returnToday)
+    await page.locator('nav:visible').getByRole('link', { name: 'Today', exact: true }).click();
 }
 async function archive(page: Page, title: string) {
   await page.getByRole('button', { name: `Archive ${title}`, exact: true }).click();
@@ -44,7 +50,9 @@ test('all features save offline, survive reload and sync their full documents', 
 }) => {
   await ready(page);
   await context.setOffline(true);
+  await page.goto('/habits');
   await create(page, 'Add a habit', 'Offline walk');
+  await page.goto('/');
   await page.getByRole('button', { name: 'Complete Offline walk', exact: true }).click();
   await page.getByRole('button', { name: 'Undo Offline walk', exact: true }).click();
   await page.getByRole('button', { name: 'Complete Offline walk', exact: true }).click();
@@ -87,7 +95,6 @@ test('all features save offline, survive reload and sync their full documents', 
   await page.goto('/settings');
   await page.getByLabel('What should we call you?').fill('Offline name');
   await page.getByRole('button', { name: 'Dark', exact: true }).click();
-  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await page.getByRole('button', { name: 'Edit avatar', exact: true }).click();
   await page.getByRole('dialog').getByLabel('Eyes', { exact: true }).selectOption('hearts');
   await page.getByRole('dialog').getByRole('button', { name: 'Save avatar', exact: true }).click();
@@ -99,18 +106,26 @@ test('all features save offline, survive reload and sync their full documents', 
   await page.goto('/user-id');
   await expect(page.getByRole('button', { name: 'Switch profile', exact: true })).toBeDisabled();
   await page.goto('/goals');
-  await archive(page, 'Plant');
+  await page.getByRole('button', { name: 'Delete Plant', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'Delete', exact: true })
+    .getByRole('button', { name: 'Delete', exact: true })
+    .click();
+  await expect(page.getByRole('button', { name: 'Delete Plant', exact: true })).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Delete Shelf', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Delete Plant', exact: true })).toHaveCount(0);
   await archive(page, 'Offline home');
   await page.goto('/habits');
   await archive(page, 'Offline walk');
   await page.goto('/rewards');
   await archive(page, 'Offline treat');
   const local = await localEntry(page);
-  expect(local.snapshot.progress.xp).toBe(30);
+  expect(local.snapshot.progress.xp).toBe(20);
   expect(local.queue.length).toBeGreaterThan(15);
   await context.setOffline(false);
   const server = await readSnapshot(page);
-  expect(server.progress.xp).toBe(30);
+  expect(server.progress.xp).toBe(20);
   expect(server.document.preferences).toMatchObject({
     name: 'Offline name',
     theme: 'dark',
@@ -118,12 +133,12 @@ test('all features save offline, survive reload and sync their full documents', 
   });
   expect(server.document.habits[0]).toMatchObject({ description: 'Created without a server' });
   expect(server.document.habits[0].archivedAt).not.toBeNull();
-  expect(server.document.goals[0].steps.map((s) => s.title)).toEqual(['Plant', 'Shelf']);
+  expect(server.document.goals[0].steps.map((s) => s.title)).toEqual(['Shelf']);
   expect(server.document.goals[0].archivedAt).not.toBeNull();
   expect(server.document.gifts[0].claimedAt).not.toBeNull();
   expect(server.document.gifts[0].archivedAt).not.toBeNull();
   await page.reload();
-  expect((await readSnapshot(page)).progress.xp).toBe(30);
+  expect((await readSnapshot(page)).progress.xp).toBe(20);
 });
 
 test('onboarding can finish offline after the initial connected bootstrap', async ({
@@ -454,7 +469,6 @@ test('daily habits and streaks advance at midnight while remaining offline', asy
   await ready(page);
   await page.goto('/settings');
   await page.getByLabel('Timezone', { exact: true }).selectOption('UTC');
-  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await readSnapshot(page);
   await page.goto('/');
   await context.setOffline(true);

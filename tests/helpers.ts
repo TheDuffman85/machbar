@@ -34,7 +34,11 @@ export async function localEntry(page: Page) {
 export async function readSnapshot(page: Page): Promise<Bootstrap> {
   // UI actions acknowledge local persistence; fixtures need the eventual server state.
   if (await page.evaluate(() => navigator.onLine)) {
-    await expect.poll(async () => (await localEntry(page))?.queue.length ?? 0).toBe(0);
+    // An interrupted request can use its 10-second timeout before the reconnect
+    // retry drains the queue. Keep the assertion bounded beyond that timeout.
+    await expect
+      .poll(async () => (await localEntry(page))?.queue.length ?? 0, { timeout: 20000 })
+      .toBe(0);
   }
   const id = await page.evaluate(() => localStorage.getItem('machbar-user-id'));
   const response = await page.request.get('/api/bootstrap', {

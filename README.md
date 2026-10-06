@@ -13,7 +13,11 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Open **http://localhost:3000**. Configure your name, language, timezone, and avatar, then add your first habit or goal. Data lives in the persistent `machbar_data` volume. The container runs as an unprivileged user, has a read-only application filesystem, and exposes `/health` for health checks.
+Open **http://localhost:3000**. Configure your name, language, timezone, and avatar, then add your first habit or goal. Data lives in the persistent `machbar_data` volume. The entrypoint starts as root to prepare the data directory and existing JSON profile files, then replaces itself with the app running as the unprivileged `node` user (UID/GID **1000:1000**). Compose keeps the application filesystem read-only and exposes `/health` for health checks.
+
+To store data in a host directory, replace the volume mapping with a bind mount, for example `/srv/data/machbar:/app/data`. On startup the image automatically repairs ownership and owner access for the mounted directory and its regular `*.json` files. This also fixes `EACCES: permission denied` errors during sync when Docker created the host directory as root. Repairs preserve existing JSON contents and skip symlinked profile files. Absolute `DATA_DIR` overrides are supported. A failed repair or an unwritable data directory stops startup with an explanatory error.
+
+The Compose capabilities `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, and `SETGID` allow the startup repair and user switch; the app runs without effective capabilities after the switch. If you require a non-root container from its first instruction, pre-create the data directory with ownership **1000:1000**, give its owner directory read/write/search access and existing JSON files read/write access, set `user: '1000:1000'`, and remove `cap_add` while keeping `cap_drop: [ALL]`. This skips automatic ownership repair and still checks that the directory is writable. Non-root process execution is separate from [Docker's rootless daemon mode](https://docs.docker.com/engine/security/rootless/): with a rootless daemon or user namespaces, bind-mount ownership must use the daemon's mapped IDs.
 
 By default the port binds to all network interfaces. Other devices can open `http://<server-ip>:3000`; the app accepts same-origin writes through that address. Set `BIND_ADDRESS=127.0.0.1` to limit access to the host. For a public deployment, place an HTTPS reverse proxy in front of the app and set `APP_URL=https://machbar.example.com`. Service workers require HTTPS, except on localhost.
 
@@ -56,13 +60,15 @@ NODE_ENV=production pnpm start
 
 ## Daily rules and offline behavior
 
-- Habits repeat daily or on selected weekdays. Streaks count consecutive scheduled occurrences; unscheduled days do not break them. An unfinished occurrence today remains open until the day ends.
+- Habits repeat daily, on selected weekdays, weekly, monthly, or every **1–365 days/weeks/months**. Weekly periods start Monday; monthly periods start on the 1st. Custom intervals use a chosen start date (aligned to its containing Monday/month start for weeks/months). A habit created partway through a calendar period gets the remaining days as its first period. Future starts remain unavailable until their start date.
+- Longer-period habits appear in a separate Today section and do not increase the daily target. Complete once anytime before the period ends: the checkoff stays checked throughout that period and earns **10 XP once**. Streaks count consecutive successful occurrences; an unfinished current period stays open, and a missed finished period breaks the streak. Daily XP is shown on the original completion date.
 - Today shows each habit's current streak and the selected date. Opening the page always starts on today. Use the day arrows to fill in missed checkoffs on dates when the habit was scheduled, up to **3 days before today** by default. Set `DAILY_HISTORY_DAYS` in the environment or root `.env` to a non-negative integer to change this limit (`0` allows today only), then restart the server or recreate the Compose container; no rebuild is needed. XP and streaks update automatically. Past checkoffs also work offline with the last cached limit.
-- Habit schedule edits take effect tomorrow. Schedule history retains earlier weekdays and timezones. Dates use IANA timezones, not the server's local clock.
-- Goal steps may be undated or have a date. Today shows due and overdue steps; undated steps remain in Goals. An empty goal does not complete.
+- Habit interval edits take effect after the current day or longer period ends; further edits replace the pending change. A changed rhythm starts a new current streak while retaining earlier completions, best streaks, XP and rewards. Timezone changes also take effect after the current period, preserving its anchor and streak. Schedule history retains earlier rhythms and timezones. Legacy weekday history keeps its original streak behavior; new interval edits record an explicit reset marker. Dates use IANA timezones, not the server's local clock.
+- Goal steps may be undated or have a date. Today shows due and overdue steps, plus a “Whenever you have time” section suggesting the first unfinished undated step from each active goal in its existing order. Expand it to show all available undated steps and check them off directly. Optional steps earn XP without increasing the daily progress total; completed steps stay visible on the day they were finished, including in daily history. Past days show completed optional steps only. An empty goal does not complete.
 - Undo recalculates XP, levels, streaks, badges, and unclaimed gifts. Claimed gifts remain in history. Archiving retains completion records and earned XP.
 - After the first connected visit, install the app through your browser. On iOS use **Share → Add to Home Screen**.
-- After the first connected profile visit, every feature except switching profiles works offline: create/edit/archive habits, goals, steps and gifts, reorder steps, check off or undo tasks, claim gifts, and save settings or avatars. Changes are committed to IndexedDB before the UI confirms success and survive reloads. Onboarding can finish offline once the initial profile has loaded. A new profile cannot initialize without that first connection.
+- Individual goal steps can be deleted after confirmation. Deletion removes the step and its completion progress, including its XP, and survives synchronization with other devices. Goals themselves can still be archived with their history preserved.
+- After the first connected profile visit, every feature except switching profiles works offline: create/edit/archive habits, goals and gifts, create/edit/delete steps, reorder steps, check off or undo tasks, claim gifts, and save settings or avatars. Changes are committed to IndexedDB before the UI confirms success and survive reloads. Onboarding can finish offline once the initial profile has loaded. A new profile cannot initialize without that first connection.
 - Local changes, reconnection, foreground focus, app launch, and manual retry trigger background synchronization. Cached startup and local saves never wait for API availability. Requests time out after 10 seconds; transient failures retry with backoff. Background Sync support is not required. Retries are idempotent, and duplicate wins earn XP once.
 - Browser-ID switches keep local documents, sync baselines, and pending changes scoped to their original ID. Pending changes are never replayed into another account. IndexedDB transactions coordinate local writes across tabs, with Web Locks additionally coordinating sync where available.
 - Sync performs a three-way merge against the last synchronized document. Independent additions and edits to different fields combine; the server value wins when both devices edit the same field differently. Completed wins conflicting completion changes, including an undo versus a remote undo/recompletion. Ordinary undo still works when the server completion has not changed since the baseline. Archives and gift claims survive conflicts. Schedule entries merge by effective date, with the server winning ties; timezone conflicts keep the server calendar schedules together. Step ordering preserves additions, using server ordering when both sides reorder. Original completion dates and timezones are retained.
@@ -86,11 +92,11 @@ Bootstrap, profile switching, and sync return `{ document, dailyHistoryDays }`. 
 
 Sync sends `If-Match: <server revision>`, `X-Machbar-User: <userId>`, a same-origin `Origin`, and the complete document as JSON. Its `userId` and `revision` must match the identity header and expected revision. The server saves only if its current revision matches, then increments the revision. On `DOCUMENT_CONFLICT`, the client fetches the latest document, merges again, and retries. Failed or interrupted requests leave local pending changes intact. An acknowledgment clears only the captured batch; changes made during a request remain pending and are rebased onto the saved document. Sync accepts documents up to 8 MiB.
 
-The stored document remains schema version 1. It includes task IDs, schedule history, archive/claim timestamps, completion records and operation receipts. Completion identities are habit/date or goal-step ID; progress is derived from completed records, so retries do not award duplicate XP.
+The stored document remains schema version 1. It includes task IDs, schedule history, archive/claim timestamps, completion records and operation receipts. Existing completion identities remain habit/date or goal-step ID. Period habits use habit/period-start identities and optional `periodStart` metadata while retaining the actual completion date and timezone; progress is derived from completed records, so retries do not award duplicate XP.
 
 Errors return `{ "code": "STABLE_ERROR_CODE" }`. Common codes include `VALIDATION_ERROR`/`INVALID_IDENTITY` (400), `ORIGIN_REJECTED` (403), `NOT_FOUND`/`USER_NOT_FOUND` (404), `DOCUMENT_CONFLICT`/`ACCOUNT_CHANGED` (409), `REVISION_REQUIRED` (428), and `DATA_CORRUPT` (500). UI messages are translated.
 
-Deploy the client and API together: the old feature-specific mutation endpoints have been removed. When upgrading from the completion-only client, close all open Machbar tabs/windows and reopen the app so its waiting service worker can activate and migrate the local cache, including unsynced checkoffs. Browser data must remain intact during the upgrade.
+Deploy the client and API together. For the interval update, close all open Machbar tabs/windows and reopen the app so the updated client activates before using new schedules. Existing documents, browser caches and pending daily checkoffs remain compatible; no data reset is needed. The old feature-specific mutation endpoints have been removed. When upgrading from the completion-only client, close all open Machbar tabs/windows and reopen the app so its waiting service worker can activate and migrate the local cache, including unsynced checkoffs. Browser data must remain intact during the upgrade.
 
 ## Backup and restore
 
@@ -120,12 +126,15 @@ This overwrites matching user files; restore into a fresh volume if you need an 
 pnpm check
 pnpm exec playwright install chromium
 pnpm test:e2e
+pnpm test:docker
 docker compose config --quiet
 docker compose up -d --build
 curl http://localhost:3000/health
 ```
 
 Browser tests exercise the production build on an isolated temporary data directory at port 3100. They cover desktop/mobile layouts, accessibility, all offline feature mutations, offline reload and synchronization, automatic conflicts, API outages, interrupted requests, cache upgrades, multiple tabs, and account switching. An existing Chromium executable can be selected through `PLAYWRIGHT_CHROMIUM_EXECUTABLE`. Production does not contain the test reset or seed routes.
+
+Docker tests build an isolated image and verify permission repair with existing root-owned profiles, a real API sync, the application's UID/GID and lack of effective capabilities, direct non-root startup, custom data directories, symlink preservation, and unwritable-mount errors. They require a local Linux Docker daemon without user namespace remapping and do not publish ports or use your application data.
 
 ## Plant growth
 
