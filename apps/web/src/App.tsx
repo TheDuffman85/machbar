@@ -17,6 +17,7 @@ import { SproutArt } from './Plant';
 import { UserIdentity } from './UserIdentity';
 import { localUserIdKey } from './identity';
 import { lockPageScroll } from './scrollLock';
+import { buildInfo } from './buildInfo';
 import { Avatar } from './Avatar';
 import { AvatarEditor, type AvatarValue } from './AvatarEditor';
 import {
@@ -75,6 +76,8 @@ import {
   ApiError,
   discardQueue,
   loadEntry,
+  loadSyncLog,
+  subscribeSyncLog,
   syncEntry,
   subscribeEntries,
   mutate,
@@ -113,6 +116,8 @@ type AppContext = {
   entry: Entry;
   online: boolean;
   busy: boolean;
+  syncing: boolean;
+  sync: () => Promise<void>;
   action: (path: string, method: string, body?: unknown) => Promise<boolean>;
   errorCode: string;
   toggle: (
@@ -383,7 +388,12 @@ export function App() {
     userId: string;
     theme: Preferences['theme'];
   } | null>(null);
+  const [slowSync, setSlowSync] = useState(false);
+  const [syncFailed, setSyncFailed] = useState(false);
   const syncingRef = useRef(false);
+  const syncTimerRef = useRef<number | undefined>(undefined);
+  const syncRef = useRef<() => Promise<void>>(async () => {});
+  const entryRef = useRef<Entry | undefined>(undefined);
   const syncRequestedRef = useRef(false);
   const retryDelayRef = useRef(5_000);
   const {
@@ -391,6 +401,7 @@ export function App() {
     updateServiceWorker,
   } = useRegisterSW();
   const entry = query.data;
+  entryRef.current = entry;
   const snapshot = entry ? visibleSnapshot(entry) : undefined;
   const preferences = snapshot?.document.preferences;
   const theme =
@@ -403,42 +414,86 @@ export function App() {
     setToast('');
     setError('');
     setThemePreview(null);
+    setSyncFailed(false);
   }, [snapshot?.document.userId]);
   const sync = async () => {
+    if (!navigator.onLine) {
+      clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = window.setTimeout(() => void syncRef.current(), 5_000);
+      return;
+    }
     if (syncingRef.current) {
       syncRequestedRef.current = true;
       return;
     }
+    const syncingUserId = localStorage.getItem(localUserIdKey);
+    clearTimeout(syncTimerRef.current);
     syncRequestedRef.current = false;
     syncingRef.current = true;
     setSyncing(true);
+    setSlowSync(false);
+    const noticeTimer = window.setTimeout(() => setSlowSync(true), 2_500);
+    let succeeded = false;
     try {
       const next = await syncEntry();
+      succeeded = true;
       retryDelayRef.current = 5_000;
+      setSyncFailed(false);
       if (next.snapshot.document.userId === localStorage.getItem(localUserIdKey))
         queryClient.setQueryData(['machbar'], next);
     } catch (e) {
       retryDelayRef.current = Math.min(retryDelayRef.current * 2, 60_000);
-      if (!(e instanceof ApiError && (e.code === 'OFFLINE' || e.code === 'ACCOUNT_CHANGED')))
-        setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
+      if (
+        syncingUserId === localStorage.getItem(localUserIdKey) &&
+        !(e instanceof ApiError && e.code === 'ACCOUNT_CHANGED')
+      )
+        setSyncFailed(true);
+      // Background network failures are recorded in the log. Local storage
+      // failures still need attention because they also affect local saves.
+      if (
+        syncingUserId === localStorage.getItem(localUserIdKey) &&
+        e instanceof ApiError &&
+        e.code === 'STORAGE_UNAVAILABLE'
+      )
+        setError(e.code);
     } finally {
+      clearTimeout(noticeTimer);
       syncingRef.current = false;
       setSyncing(false);
-      if (syncRequestedRef.current) void sync();
+      setSlowSync(false);
+      // Coalesce new edits after a successful upload. A failure must yield to
+      // the retry backoff instead of immediately restarting a stalled sync.
+      const userChanged = syncingUserId !== localStorage.getItem(localUserIdKey);
+      if (userChanged) retryDelayRef.current = 5_000;
+      if ((succeeded || userChanged) && syncRequestedRef.current) void syncRef.current();
+      else {
+        syncRequestedRef.current = false;
+        syncTimerRef.current = window.setTimeout(
+          () => void syncRef.current(),
+          succeeded && !entryRef.current?.queue.length ? 60_000 : retryDelayRef.current,
+        );
+      }
     }
   };
+  syncRef.current = sync;
   useEffect(() => {
     const reconnect = () => {
       setOnline(navigator.onLine);
       if (navigator.onLine) void sync();
     };
     const foreground = () => {
-      if (!document.hidden) void sync();
+      if (!document.hidden) void syncRef.current();
     };
     const readLocal = async () => {
-      const next = await loadEntry();
-      if (next.snapshot.document.userId === localStorage.getItem(localUserIdKey))
-        queryClient.setQueryData(['machbar'], next);
+      try {
+        const next = await loadEntry();
+        if (next.snapshot.document.userId === localStorage.getItem(localUserIdKey)) {
+          queryClient.setQueryData(['machbar'], next);
+          return next;
+        }
+      } catch (e) {
+        setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
+      }
     };
     const identityChanged = (event: StorageEvent) => {
       if (event.key === localUserIdKey)
@@ -447,28 +502,17 @@ export function App() {
         });
     };
     const unsubscribe = subscribeEntries(() => {
-      void readLocal();
+      void readLocal().then((next) => {
+        // Another window's local edits also deserve a prompt upload. A sync
+        // acknowledgment has no queue and must not create a refresh loop.
+        if (next?.queue.length) void syncRef.current();
+      });
     });
-    if (entry && navigator.onLine) void sync();
+    if (entry) void syncRef.current();
     window.addEventListener('online', reconnect);
     window.addEventListener('offline', reconnect);
     document.addEventListener('visibilitychange', foreground);
     window.addEventListener('storage', identityChanged);
-    // Network status events can be missed after an offline reload. Retry pending
-    // changes promptly while keeping the normal refresh interval for idle users.
-    let timer: number;
-    let cancelled = false;
-    const retry = () => {
-      if (cancelled) return;
-      timer = window.setTimeout(
-        () => {
-          if (!document.hidden && navigator.onLine) void sync().finally(retry);
-          else retry();
-        },
-        entry?.queue.length ? retryDelayRef.current : 60_000,
-      );
-    };
-    retry();
     // Refresh calendar/progress at midnight in the profile's timezone.
     const clock = window.setInterval(() => {
       if (entry)
@@ -481,12 +525,11 @@ export function App() {
       window.removeEventListener('offline', reconnect);
       document.removeEventListener('visibilitychange', foreground);
       window.removeEventListener('storage', identityChanged);
-      cancelled = true;
-      window.clearTimeout(timer);
+      window.clearTimeout(syncTimerRef.current);
       window.clearInterval(clock);
       unsubscribe();
     };
-  }, [entry?.snapshot.document.userId, entry?.queue.length]);
+  }, [entry?.snapshot.document.userId]);
   useEffect(() => {
     if (toast) {
       const timer = window.setTimeout(() => setToast(''), 3500);
@@ -521,7 +564,7 @@ export function App() {
       return true;
     } catch (e) {
       setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
-      if (e instanceof ApiError && e.status === 409) await sync();
+      if (e instanceof ApiError && e.status === 409) void sync();
       return false;
     } finally {
       setBusy(false);
@@ -586,6 +629,8 @@ export function App() {
     entry,
     online,
     busy,
+    syncing,
+    sync,
     action,
     toggle,
     setModal: (state) => {
@@ -619,10 +664,6 @@ export function App() {
         </aside>
         <div className="main-shell">
           <header className="topbar">
-            <span className="topbar-quote">
-              <Leaf size={15} />
-              {t('welcome')}
-            </span>
             <span className="mobile-brand">
               <Brand />
             </span>
@@ -637,7 +678,10 @@ export function App() {
           <main className="main-content">
             <div className="notifications">
               {notifications}
-              {(!online || entry.queue.length > 0 || entry.conflict) && (
+              {(!online ||
+                slowSync ||
+                (syncFailed && !syncing && entry.queue.length > 0) ||
+                entry.conflict) && (
                 <div className="notice" role="status">
                   <div>
                     {!online ? (
@@ -708,6 +752,10 @@ export function App() {
               <Route path="/habits" element={<Habits />} />
               <Route path="/rewards" element={<Rewards />} />
               <Route path="/settings" element={<Settings />} />
+              <Route
+                path="/settings/sync-log"
+                element={<SyncLog key={snapshot.document.userId} />}
+              />
               <Route
                 path="/user-id"
                 element={
@@ -1851,7 +1899,7 @@ function Rewards() {
 }
 
 function Settings() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { snapshot, install } = useApp();
   return (
     <>
@@ -1875,10 +1923,39 @@ function Settings() {
           </section>
           <section className="panel settings-panel">
             <span className="settings-feature-icon">
+              <RefreshCw size={24} />
+            </span>
+            <h2>{t('syncLog')}</h2>
+            <p>{t('syncLogHelp')}</p>
+            <NavLink className="button secondary" to="/settings/sync-log">
+              {t('viewSyncLog')}
+              <ChevronRight size={16} />
+            </NavLink>
+          </section>
+          <section className="panel settings-panel">
+            <span className="settings-feature-icon">
               <Leaf size={24} />
             </span>
             <h2>{t('selfHosted')}</h2>
             <p>{t('browserProfile')}</p>
+            <dl className="build-info">
+              <div>
+                <dt>{t('version')}</dt>
+                <dd>{buildInfo.version}</dd>
+              </div>
+              <div>
+                <dt>{t('buildDate')}</dt>
+                <dd>
+                  <time dateTime={buildInfo.builtAt}>
+                    {new Intl.DateTimeFormat(i18n.language, {
+                      dateStyle: 'medium',
+                      timeStyle: 'long',
+                      timeZone: snapshot.document.preferences.timezone,
+                    }).format(new Date(buildInfo.builtAt))}
+                  </time>
+                </dd>
+              </div>
+            </dl>
             <a
               className="text-button credits-link"
               href="/credits.txt"
@@ -1894,6 +1971,102 @@ function Settings() {
     </>
   );
 }
+function SyncLog() {
+  const { t, i18n } = useTranslation();
+  const { snapshot, entry, online, syncing, sync } = useApp();
+  const userId = snapshot.document.userId;
+  const queryClient = useQueryClient();
+  const queryKey = ['sync-log', userId];
+  const log = useQuery({ queryKey, queryFn: () => loadSyncLog(userId), networkMode: 'always' });
+  useEffect(
+    () =>
+      subscribeSyncLog(userId, () => {
+        void queryClient.invalidateQueries({ queryKey: ['sync-log', userId] });
+      }),
+    [queryClient, userId],
+  );
+  return (
+    <>
+      <NavLink className="text-button" to="/settings">
+        <ChevronLeft size={16} />
+        {t('settings')}
+      </NavLink>
+      <Heading title={t('syncLog')} subtitle={t('syncLogHelp')}>
+        <button
+          className="button secondary"
+          disabled={!online || syncing}
+          onClick={() => void sync()}
+        >
+          <RefreshCw size={16} className={syncing ? 'spin' : ''} />
+          {t('syncNow')}
+        </button>
+      </Heading>
+      <p className="muted sync-log-summary" role="status">
+        {t(
+          !online
+            ? 'offline'
+            : syncing
+              ? 'syncing'
+              : entry.queue.length
+                ? 'queued'
+                : 'syncUpToDate',
+          { count: entry.queue.length },
+        )}
+      </p>
+      {log.isPending ? (
+        <p className="muted">{t('loading')}</p>
+      ) : log.isError ? (
+        <div className="panel settings-panel">
+          <p>{t(log.error instanceof ApiError ? log.error.code : 'INTERNAL_ERROR')}</p>
+          <button className="button secondary" onClick={() => void log.refetch()}>
+            {t('retry')}
+          </button>
+        </div>
+      ) : log.data?.length ? (
+        <ol className="sync-log-list">
+          {log.data.map((operation) => (
+            <li className="panel sync-log-operation" key={operation.id}>
+              <div className="sync-log-heading">
+                <strong>
+                  {t(
+                    operation.status === 'success'
+                      ? 'syncSucceeded'
+                      : operation.status === 'blocked'
+                        ? 'syncBlocked'
+                        : 'syncFailed',
+                  )}
+                </strong>
+                <time dateTime={operation.startedAt}>
+                  {new Date(operation.startedAt).toLocaleString(i18n.language)}
+                </time>
+              </div>
+              <p>
+                {t('syncDetails', {
+                  count: operation.changes,
+                  duration: (operation.durationMs / 1000).toLocaleString(i18n.language, {
+                    maximumFractionDigits: 2,
+                  }),
+                  attempts: operation.attempts,
+                })}
+              </p>
+              {operation.status === 'success' && (
+                <p>
+                  {t(operation.uploaded ? 'syncUploaded' : 'syncChecked', {
+                    revision: operation.revision,
+                  })}
+                </p>
+              )}
+              {operation.error && <p className="sync-log-error">{t(operation.error)}</p>}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <Empty icon={RefreshCw} title={t('syncLogEmpty')} />
+      )}
+    </>
+  );
+}
+
 function ProfileForm({
   onboarding = false,
   onThemePreview,

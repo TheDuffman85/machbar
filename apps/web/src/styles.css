@@ -263,17 +263,8 @@ h3 {
   justify-content: space-between;
   background: var(--bg);
 }
-.topbar-quote {
-  color: var(--muted);
-  font-size: 11px;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-.topbar-quote svg {
-  color: #9fac94;
-}
 .topbar-right {
+  margin-left: auto;
   display: flex;
   gap: 20px;
   align-items: center;
@@ -1390,6 +1381,51 @@ h3 {
   margin-top: 18px;
   font-size: 11px;
 }
+.build-info {
+  display: grid;
+  gap: 14px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.build-info dt {
+  color: var(--muted);
+}
+.build-info dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+.sync-log-summary {
+  margin-bottom: 24px;
+}
+.sync-log-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.sync-log-operation {
+  padding: 20px;
+  min-width: 0;
+}
+.sync-log-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 20px;
+  margin-bottom: 10px;
+}
+.sync-log-operation time,
+.sync-log-operation p {
+  font-size: 13px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.sync-log-operation p + p {
+  margin-top: 6px;
+}
+.sync-log-operation .sync-log-error {
+  color: var(--text);
+}
 .identity-qr {
   display: block;
   width: min(256px, 100%);
@@ -1857,9 +1893,6 @@ legend {
   .badge-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .topbar-quote {
-    font-size: 10px;
-  }
   .topbar-right {
     gap: 12px;
   }
@@ -1893,9 +1926,6 @@ legend {
   .topbar {
     height: 73px;
     padding: 0 21px;
-  }
-  .topbar-quote {
-    display: none;
   }
   .mobile-brand {
     display: block;

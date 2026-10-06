@@ -43,6 +43,7 @@ test('browser IDs persist, isolate progress, and can switch manually or by QR im
   await onboard(page, 'Alice');
   const alice = (await readSnapshot(page)).document.userId;
   expect(alice).toMatch(/^[a-f0-9-]{36}$/);
+  await page.locator('nav:visible').getByRole('link', { name: 'Habits', exact: true }).click();
   await page.getByRole('button', { name: 'Add a habit', exact: true }).first().click();
   await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Alice’s habit');
   await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click();
@@ -203,10 +204,12 @@ test('an existing profile can be restored during onboarding, and switching is bl
   } finally {
     await otherContext.close();
   }
+  await page.locator('nav:visible').getByRole('link', { name: 'Habits', exact: true }).click();
   await page.getByRole('button', { name: 'Add a habit', exact: true }).first().click();
   await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Offline habit');
   await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.locator('nav:visible').getByRole('link', { name: 'Today', exact: true }).click();
   await context.setOffline(true);
   await page.getByRole('button', { name: 'Complete Offline habit', exact: true }).click();
   await openIdentity(page);
@@ -239,10 +242,12 @@ test('switching profiles updates other tabs without mixing their data', async ({
     await page.getByLabel('Existing user ID').fill(bob);
     await page.getByRole('button', { name: 'Switch profile', exact: true }).click();
     await expect(tab.getByRole('heading', { name: 'Hey, Bob', exact: true })).toBeVisible();
+    await tab.locator('nav:visible').getByRole('link', { name: 'Habits', exact: true }).click();
     await tab.getByRole('button', { name: 'Add a habit', exact: true }).first().click();
     await tab.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Bob’s habit');
     await tab.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click();
     await expect(tab.getByRole('dialog')).toHaveCount(0);
+    await tab.locator('nav:visible').getByRole('link', { name: 'Today', exact: true }).click();
     expect((await readSnapshot(other)).document.habits[0].title).toBe('Bob’s habit');
     await page.getByLabel('Existing user ID').fill(alice);
     await page.getByRole('button', { name: 'Switch profile', exact: true }).click();

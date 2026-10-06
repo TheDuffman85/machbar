@@ -6,6 +6,18 @@ import {
   type UserDocument,
 } from '@machbar/shared';
 
+export type SyncOperation = {
+  id: string;
+  startedAt: string;
+  durationMs: number;
+  status: 'success' | 'failed' | 'blocked';
+  changes: number;
+  attempts: number;
+  uploaded: boolean;
+  revision?: number;
+  error?: string;
+};
+
 export type PendingMutation = {
   operationId: string;
   targetType?: CompletionOperation['targetType'];

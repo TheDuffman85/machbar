@@ -1,4 +1,4 @@
-import { openDB, type DBSchema } from 'idb';
+import { openDB, type DBSchema, type IDBPDatabase, type IDBPTransaction } from 'idb';
 import { newId } from './uuid';
 import { getLocalUserId, localUserIdKey } from './identity';
 import {
@@ -13,8 +13,8 @@ import {
   type CompletionOperation,
   type SyncSnapshot,
 } from '@machbar/shared';
-import { migrateEntry, type Entry, type LegacyEntry } from './cache';
-export type { Entry } from './cache';
+import { migrateEntry, type Entry, type LegacyEntry, type SyncOperation } from './cache';
+export type { Entry, SyncOperation } from './cache';
 
 export class ApiError extends Error {
   constructor(
@@ -26,30 +26,141 @@ export class ApiError extends Error {
 }
 interface CacheDB extends DBSchema {
   accounts: { key: string; value: Entry | LegacyEntry };
+  syncLog: { key: string; value: SyncOperation[] };
 }
-const db = openDB<CacheDB>('machbar', 2, {
-  upgrade(database, oldVersion, _newVersion, transaction) {
-    if (oldVersion === 0) database.createObjectStore('accounts');
-    else {
-      void (async () => {
-        let cursor = await transaction.objectStore('accounts').openCursor();
-        while (cursor) {
-          await cursor.update(migrateEntry(cursor.value));
-          cursor = await cursor.continue();
-        }
-      })().catch(() => transaction.abort());
+function storageDeadline<T>(work: Promise<T>, expire: () => void): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      expire();
+      reject(new ApiError('STORAGE_UNAVAILABLE'));
+    }, 5_000);
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+
+let db: Promise<IDBPDatabase<CacheDB>> | undefined;
+function database(): Promise<IDBPDatabase<CacheDB>> {
+  if (db) return db;
+  let expired = false;
+  const opening = openDB<CacheDB>('machbar', 3, {
+    upgrade(database, oldVersion, _newVersion, transaction) {
+      if (oldVersion < 3) database.createObjectStore('syncLog');
+      if (oldVersion === 0) database.createObjectStore('accounts');
+      else if (oldVersion < 2) {
+        void (async () => {
+          let cursor = await transaction.objectStore('accounts').openCursor();
+          while (cursor) {
+            await cursor.update(migrateEntry(cursor.value));
+            cursor = await cursor.continue();
+          }
+        })().catch(() => transaction.abort());
+      }
+    },
+    blocking() {
+      if (db === pending) db = undefined;
+      void opening.then((connection) => connection.close());
+    },
+    terminated() {
+      if (db === pending) db = undefined;
+    },
+  });
+  const pending = storageDeadline(opening, () => {
+    expired = true;
+    if (db === pending) db = undefined;
+  });
+  // An IndexedDB open cannot be cancelled. Close a late connection so it cannot
+  // block a future upgrade, and let Retry open a fresh connection.
+  void opening.then(
+    (connection) => {
+      if (expired) connection.close();
+    },
+    () => {},
+  );
+  void pending.catch(() => {
+    if (db === pending) db = undefined;
+  });
+  db = pending;
+  return pending;
+}
+
+async function transact<
+  T,
+  Store extends 'accounts' | 'syncLog',
+  Mode extends 'readonly' | 'readwrite',
+>(
+  store: Store,
+  mode: Mode,
+  run: (tx: IDBPTransaction<CacheDB, [Store], Mode>) => Promise<T>,
+  committed?: (result: T) => void,
+): Promise<T> {
+  const connection = await database();
+  const current = db;
+  const tx = connection.transaction(store, mode);
+  let expired = false;
+  const abort = () => {
+    try {
+      tx.abort();
+    } catch {
+      /* Already committed or aborted. */
     }
-  },
-  blocking() {
-    void db.then((database) => database.close());
-  },
-});
+  };
+  try {
+    return await storageDeadline(
+      (async () => {
+        const result = await run(tx);
+        await tx.done;
+        if (expired) throw new ApiError('STORAGE_UNAVAILABLE');
+        committed?.(result);
+        return result;
+      })(),
+      () => {
+        expired = true;
+        abort();
+        connection.close();
+        if (db === current) db = undefined;
+      },
+    );
+  } catch (error) {
+    abort();
+    // Do not wait on a stalled transaction while reporting a storage timeout.
+    void tx.done.catch(() => {});
+    throw error;
+  }
+}
 const channel =
   typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('machbar-data') : undefined;
 export function subscribeEntries(listener: () => void): () => void {
-  const receive = () => listener();
+  const receive = (event: MessageEvent) => {
+    if (typeof event.data === 'string') listener();
+  };
   channel?.addEventListener('message', receive);
   return () => channel?.removeEventListener('message', receive);
+}
+const logListeners = new Set<(userId: string) => void>();
+channel?.addEventListener('message', (event) => {
+  if (event.data?.kind === 'sync-log')
+    for (const listener of logListeners) listener(event.data.userId);
+});
+export function subscribeSyncLog(userId: string, listener: () => void): () => void {
+  const receive = (id: string) => {
+    if (id === userId) listener();
+  };
+  logListeners.add(receive);
+  return () => {
+    logListeners.delete(receive);
+  };
+}
+export async function loadSyncLog(userId: string): Promise<SyncOperation[]> {
+  return (await transact('syncLog', 'readonly', (tx) => tx.store.get(userId))) ?? [];
+}
+async function recordSync(userId: string, operation: SyncOperation): Promise<void> {
+  await transact('syncLog', 'readwrite', async (tx) => {
+    const previous = (await tx.store.get(userId)) ?? [];
+    await tx.store.put([operation, ...previous].slice(0, 50), userId);
+  });
+  for (const listener of logListeners) listener(userId);
+  channel?.postMessage({ kind: 'sync-log', userId });
 }
 export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
@@ -57,48 +168,49 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   const localId = localStorage.getItem(localUserIdKey);
   if (path.startsWith('/api/') && localId && !headers.has('X-Machbar-User'))
     headers.set('X-Machbar-User', localId);
-  let response: Response;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  options.signal?.addEventListener('abort', abort, { once: true });
+  if (options.signal?.aborted) abort();
+  const timer = setTimeout(abort, 10_000);
   try {
-    response = await fetch(path, {
+    const response = await fetch(path, {
       ...options,
       credentials: 'same-origin',
       headers,
-      signal: options.signal ?? AbortSignal.timeout(10_000),
+      signal: controller.signal,
     });
-  } catch {
+    if (!response.ok) {
+      const error = await response.json().catch((error: unknown) => {
+        if (controller.signal.aborted) throw error;
+        return { code: 'INTERNAL_ERROR' };
+      });
+      throw new ApiError(error.code ?? 'INTERNAL_ERROR', response.status);
+    }
+    return await response.json();
+  } catch (error) {
+    if (error instanceof ApiError || error instanceof SyntaxError) throw error;
     throw new ApiError('OFFLINE');
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener('abort', abort);
   }
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ code: 'INTERNAL_ERROR' }));
-    throw new ApiError(error.code ?? 'INTERNAL_ERROR', response.status);
-  }
-  return response.json();
 }
 async function readEntry(id: string): Promise<Entry | undefined> {
-  const value = await (await db).get('accounts', id);
+  const value = await transact('accounts', 'readonly', (tx) => tx.store.get(id));
   return value ? migrateEntry(value) : undefined;
 }
-// The read-modify-write transaction also coordinates browsers without Web Locks.
+// Read-modify-write transactions coordinate local edits across windows.
 async function updateEntry(
   id: string,
   change: (entry: Entry | undefined) => Entry,
 ): Promise<Entry> {
-  const tx = (await db).transaction('accounts', 'readwrite');
-  const value = await tx.store.get(id);
-  let next: Entry;
-  try {
-    next = change(value ? migrateEntry(value) : undefined);
+  const next = await transact('accounts', 'readwrite', async (tx) => {
+    const value = await tx.store.get(id);
+    const next = change(value ? migrateEntry(value) : undefined);
     await tx.store.put(next, id);
-    await tx.done;
-  } catch (error) {
-    try {
-      tx.abort();
-    } catch {
-      /* Already committed. */
-    }
-    await tx.done.catch(() => {});
-    throw error;
-  }
+    return next;
+  });
   channel?.postMessage(id);
   return next;
 }
@@ -124,11 +236,28 @@ export function syncEntry(): Promise<Entry> {
   const id = getLocalUserId();
   const running = syncing.get(id);
   if (running) return running;
+  const started = Date.now();
+  const operation: SyncOperation = {
+    id: newId(),
+    startedAt: new Date(started).toISOString(),
+    durationMs: 0,
+    status: 'success',
+    changes: 0,
+    attempts: 0,
+    uploaded: false,
+  };
   const run = async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
       const captured = await readEntry(id);
       if (!captured) return loadEntry();
-      if (captured.recovery?.length) return captured;
+      operation.changes = captured.queue.length;
+      if (captured.recovery?.length) {
+        operation.status = 'blocked';
+        operation.error = captured.conflict ?? 'COMPLETION_CONFLICT';
+        return captured;
+      }
+      operation.attempts++;
+
       const remote = await request<SyncSnapshot>('/api/bootstrap', {
         headers: { 'X-Machbar-User': id },
       });
@@ -136,17 +265,20 @@ export function syncEntry(): Promise<Entry> {
       const document = mergeDocuments(captured.base, captured.snapshot.document, remote.document);
       let acknowledged = remote;
       try {
-        if (!same(document, remote.document))
+        if (!same(document, remote.document)) {
           acknowledged = await request<SyncSnapshot>('/api/sync', {
             method: 'PUT',
             headers: { 'X-Machbar-User': id, 'If-Match': String(remote.document.revision) },
             body: JSON.stringify(document),
           });
+          operation.uploaded = true;
+        }
       } catch (error) {
         if (error instanceof ApiError && error.code === 'DOCUMENT_CONFLICT') continue;
         throw error;
       }
       if (acknowledged.document.userId !== id) throw new ApiError('ACCOUNT_CHANGED', 409);
+      operation.revision = acknowledged.document.revision;
       const batch = new Set(captured.queue.map((op) => op.operationId));
       const next = await updateEntry(id, (latest) => {
         if (!latest) throw new ApiError('INVALID_IDENTITY', 400);
@@ -173,10 +305,21 @@ export function syncEntry(): Promise<Entry> {
     }
     throw new ApiError('DOCUMENT_CONFLICT', 409);
   };
-  const promise = (async () =>
-    navigator.locks
-      ? await navigator.locks.request(`machbar-sync:${id}`, run)
-      : await run())().finally(() => syncing.delete(id));
+  // Server revision checks resolve concurrent uploads. Holding a Web Lock over
+  // network I/O can leave another PWA window waiting on a suspended mobile tab.
+  const promise = run()
+    .catch((error: unknown) => {
+      operation.status = 'failed';
+      operation.error =
+        error instanceof ApiError || error instanceof DomainError ? error.code : 'INTERNAL_ERROR';
+      throw error;
+    })
+    .finally(() => {
+      operation.durationMs = Date.now() - started;
+      syncing.delete(id);
+      // Diagnostics must never delay a local save, sync acknowledgment, or retry.
+      void recordSync(id, operation).catch(() => {});
+    });
   syncing.set(id, promise);
   return promise;
 }
@@ -267,36 +410,37 @@ export async function switchLocalUser(userId: string): Promise<Entry> {
   });
   if (snapshot.document.userId !== parsed.data) throw new ApiError('ACCOUNT_CHANGED', 409);
   // Recheck after the network request, in the same transaction that changes identity.
-  const tx = (await db).transaction('accounts', 'readwrite');
-  try {
-    const current = await tx.store.get(id);
-    if (current?.queue.length) throw new ApiError('PENDING_CHANGES', 409);
-    checkIdentity(id);
-    const saved = await tx.store.get(parsed.data);
-    const previous = saved ? migrateEntry(saved) : undefined;
-    const next = previous
-      ? {
-          ...previous,
-          base: snapshot.document,
-          snapshot: bootstrapFor({
-            ...snapshot,
-            document: mergeDocuments(previous.base, previous.snapshot.document, snapshot.document),
-          }),
-        }
-      : initial(snapshot);
-    await tx.store.put(next, parsed.data);
-    await tx.done;
-    // No asynchronous gap after the final identity/queue check and storage commit.
-    localStorage.setItem(localUserIdKey, parsed.data);
-    channel?.postMessage(parsed.data);
-    return next;
-  } catch (error) {
-    try {
-      tx.abort();
-    } catch {
-      /* Already committed. */
-    }
-    await tx.done.catch(() => {});
-    throw error;
-  }
+  return transact(
+    'accounts',
+    'readwrite',
+    async (tx) => {
+      const current = await tx.store.get(id);
+      if (current?.queue.length) throw new ApiError('PENDING_CHANGES', 409);
+      checkIdentity(id);
+      const saved = await tx.store.get(parsed.data);
+      const previous = saved ? migrateEntry(saved) : undefined;
+      const next = previous
+        ? {
+            ...previous,
+            base: snapshot.document,
+            snapshot: bootstrapFor({
+              ...snapshot,
+              document: mergeDocuments(
+                previous.base,
+                previous.snapshot.document,
+                snapshot.document,
+              ),
+            }),
+          }
+        : initial(snapshot);
+      await tx.store.put(next, parsed.data);
+      return next;
+    },
+    () => {
+      // Commit the identity without an asynchronous gap after the transaction.
+      checkIdentity(id);
+      localStorage.setItem(localUserIdKey, parsed.data);
+      channel?.postMessage(parsed.data);
+    },
+  );
 }

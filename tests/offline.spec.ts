@@ -106,26 +106,21 @@ test('all features save offline, survive reload and sync their full documents', 
   await page.goto('/user-id');
   await expect(page.getByRole('button', { name: 'Switch profile', exact: true })).toBeDisabled();
   await page.goto('/goals');
-  await page.getByRole('button', { name: 'Delete Plant', exact: true }).click();
-  await page
-    .getByRole('dialog', { name: 'Delete', exact: true })
-    .getByRole('button', { name: 'Delete', exact: true })
-    .click();
-  await expect(page.getByRole('button', { name: 'Delete Plant', exact: true })).toHaveCount(0);
+  await archive(page, 'Plant');
   await page.reload();
-  await expect(page.getByRole('button', { name: 'Delete Shelf', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Delete Plant', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Archive Shelf', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Archive Plant', exact: true })).toHaveCount(0);
   await archive(page, 'Offline home');
   await page.goto('/habits');
   await archive(page, 'Offline walk');
   await page.goto('/rewards');
   await archive(page, 'Offline treat');
   const local = await localEntry(page);
-  expect(local.snapshot.progress.xp).toBe(20);
+  expect(local.snapshot.progress.xp).toBe(30);
   expect(local.queue.length).toBeGreaterThan(15);
   await context.setOffline(false);
   const server = await readSnapshot(page);
-  expect(server.progress.xp).toBe(20);
+  expect(server.progress.xp).toBe(30);
   expect(server.document.preferences).toMatchObject({
     name: 'Offline name',
     theme: 'dark',
@@ -133,12 +128,17 @@ test('all features save offline, survive reload and sync their full documents', 
   });
   expect(server.document.habits[0]).toMatchObject({ description: 'Created without a server' });
   expect(server.document.habits[0].archivedAt).not.toBeNull();
-  expect(server.document.goals[0].steps.map((s) => s.title)).toEqual(['Shelf']);
+  expect(server.document.goals[0].steps.filter((s) => !s.archivedAt).map((s) => s.title)).toEqual([
+    'Shelf',
+  ]);
+  expect(
+    server.document.goals[0].steps.find((s) => s.title === 'Plant')!.archivedAt,
+  ).not.toBeNull();
   expect(server.document.goals[0].archivedAt).not.toBeNull();
   expect(server.document.gifts[0].claimedAt).not.toBeNull();
   expect(server.document.gifts[0].archivedAt).not.toBeNull();
   await page.reload();
-  expect((await readSnapshot(page)).progress.xp).toBe(20);
+  expect((await readSnapshot(page)).progress.xp).toBe(30);
 });
 
 test('onboarding can finish offline after the initial connected bootstrap', async ({
@@ -175,6 +175,143 @@ test('cached startup and local saves remain responsive when navigator is online 
   await page.unroute('**/api/**');
   await page.getByRole('button', { name: 'Sync now', exact: true }).click();
   expect((await readSnapshot(page)).document.habits[0].title).toBe('API unavailable');
+});
+
+test('a lock held by another window cannot stall PWA habit sync or reload', async ({
+  page,
+  context,
+}) => {
+  await ready(page);
+  const other = await context.newPage();
+  await other.goto('/health');
+  const id = await page.evaluate(() => localStorage.getItem('machbar-user-id')!);
+  await other.evaluate(async (id) => {
+    await new Promise<void>((resolve) => {
+      void navigator.locks.request(`machbar-sync:${id}`, () => {
+        resolve();
+        return new Promise<void>(() => {});
+      });
+    });
+  }, id);
+  try {
+    await create(page, 'Add a habit', 'Mobile walk');
+    await page.locator('nav:visible').getByRole('link', { name: 'Habits', exact: true }).click();
+    await page.getByRole('button', { name: 'Edit Mobile walk', exact: true }).click();
+    await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Edited mobile walk');
+    await page
+      .getByRole('dialog')
+      .getByRole('button', { name: 'Save changes', exact: true })
+      .click();
+    expect((await readSnapshot(page)).document.habits[0].title).toBe('Edited mobile walk');
+    await page.reload();
+    await expect(
+      page.getByRole('button', { name: 'Edit Edited mobile walk', exact: true }),
+    ).toBeVisible();
+  } finally {
+    await other.close();
+  }
+});
+
+test('a blocked database upgrade offers Retry and preserves pending habits', async ({
+  page,
+  context,
+}) => {
+  await ready(page);
+  await context.setOffline(true);
+  await create(page, 'Add a habit', 'Saved mobile walk');
+  const saved = await localEntry(page);
+  await page.route('**/api/**', (route) => route.abort('failed'));
+  await context.setOffline(false);
+  // Recreate the previous database version with the same unsynced data.
+  await page.goto('/health');
+  const other = await context.newPage();
+  await other.goto('/health');
+  await other.evaluate(async (entry) => {
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase('machbar');
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+    const database = await new Promise<IDBDatabase>((resolve) => {
+      const request = indexedDB.open('machbar', 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('accounts');
+      request.onsuccess = () => resolve(request.result);
+    });
+    await new Promise<void>((resolve) => {
+      const tx = database.transaction('accounts', 'readwrite');
+      tx.objectStore('accounts').put(entry, entry.snapshot.document.userId);
+      tx.oncomplete = () => resolve();
+    });
+    // Simulate an old PWA window that does not respond to versionchange.
+    Object.assign(window, { heldDatabase: database });
+  }, saved);
+  try {
+    await page.goto('/');
+    await expect(
+      page.getByText(/saved data on this device is temporarily unavailable/),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Try again', exact: true })).toBeVisible();
+    await other.close();
+    await page.getByRole('button', { name: 'Try again', exact: true }).click();
+    await expect(
+      page.getByRole('button', { name: 'Complete Saved mobile walk', exact: true }),
+    ).toBeVisible();
+    expect((await localEntry(page)).queue).toEqual(saved.queue);
+    await page.unroute('**/api/**');
+    await page.getByRole('button', { name: 'Sync now', exact: true }).click();
+    expect((await readSnapshot(page)).document.habits[0].title).toBe('Saved mobile walk');
+  } finally {
+    if (!other.isClosed()) await other.close();
+  }
+});
+
+test('a stalled local transaction releases the sync indicator and can recover', async ({
+  page,
+  context,
+}) => {
+  await ready(page);
+  const other = await context.newPage();
+  await other.goto('/health');
+  await context.setOffline(true);
+  await create(page, 'Add a habit', 'Queued mobile walk');
+  const saved = await localEntry(page);
+  await other.evaluate(async (id) => {
+    const database = await new Promise<IDBDatabase>((resolve) => {
+      const request = indexedDB.open('machbar');
+      request.onsuccess = () => resolve(request.result);
+    });
+    await new Promise<void>((resolve) => {
+      const tx = database.transaction('accounts', 'readwrite');
+      const keepBusy = () => {
+        const request = tx.objectStore('accounts').get(id);
+        request.onsuccess = () => {
+          resolve();
+          keepBusy();
+        };
+      };
+      keepBusy();
+    });
+  }, saved.snapshot.document.userId);
+  try {
+    await context.setOffline(false);
+    await expect(page.getByText('Syncing your changes…', { exact: true })).toBeVisible();
+    const alert = page.getByRole('alertdialog', { name: 'Something needs your attention' });
+    await expect(
+      alert.getByText(/saved data on this device is temporarily unavailable/),
+    ).toBeVisible();
+    await alert.getByRole('button', { name: 'OK', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Sync now', exact: true })).toBeEnabled();
+    await other.close();
+    expect((await localEntry(page)).queue).toEqual(saved.queue);
+    await page.getByRole('button', { name: 'Sync now', exact: true }).click();
+    expect((await readSnapshot(page)).document.habits[0].title).toBe('Queued mobile walk');
+    await page.reload();
+    await expect(
+      page.getByRole('button', { name: 'Complete Queued mobile walk', exact: true }),
+    ).toBeVisible();
+  } finally {
+    if (!other.isClosed()) await other.close();
+  }
 });
 
 test('edits during an in-flight sync remain local and are subsequently uploaded', async ({

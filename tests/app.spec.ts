@@ -685,9 +685,7 @@ test('the day page hides archived habits, goals and steps on today and past days
   expect((await readSnapshot(page)).progress.xp).toBe(60);
 });
 
-test('sync errors preserve locally archived data and show a dismissible alert', async ({
-  page,
-}) => {
+test('sync errors preserve locally archived data and stay in the background', async ({ page }) => {
   await onboard(page);
   await addHabit(page);
   await readSnapshot(page);
@@ -701,9 +699,8 @@ test('sync errors preserve locally archived data and show a dismissible alert', 
     .getByRole('button', { name: 'Archive', exact: true })
     .click();
   const alert = page.getByRole('alertdialog', { name: 'Something needs your attention' });
-  await expect(alert).toBeVisible();
-  await expect(alert.getByRole('button', { name: 'OK', exact: true })).toBeFocused();
-  await alert.getByRole('button', { name: 'OK', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Sync now', exact: true })).toBeEnabled();
+  await expect(alert).toHaveCount(0);
   await expect(
     page.getByRole('button', { name: 'Archive Take a little walk', exact: true }),
   ).toHaveCount(0);

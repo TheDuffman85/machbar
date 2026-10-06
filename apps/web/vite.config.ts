@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -6,7 +7,17 @@ import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, fileURLToPath(new URL('../../', import.meta.url)), '');
   const appUrl = process.env.APP_URL ?? env.APP_URL;
+  const { version } = JSON.parse(
+    readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+  ) as { version: string };
+  const builtAt = new Date().toISOString();
   return {
+    define: {
+      __APP_BUILD__: JSON.stringify({
+        version: `${version}+${builtAt.replace(/\D/g, '')}`,
+        builtAt,
+      }),
+    },
     plugins: [
       react(),
       tailwindcss(),
