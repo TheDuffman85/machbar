@@ -55,7 +55,7 @@ for (const scrolled of [false, true]) {
   });
 }
 
-test('checkoffs keep the page in place and show celebration alongside sync status', async ({
+test('checkoffs keep the page in place and show sync status without a toast', async ({
   page,
 }) => {
   await page.locator('nav:visible').getByRole('link', { name: 'Habits', exact: true }).click();
@@ -74,11 +74,8 @@ test('checkoffs keep the page in place and show celebration alongside sync statu
     const sync = page.locator('.notice').filter({ hasText: 'Syncing your changes…' });
     const toast = page.locator('.toast');
     await expect(sync).toBeVisible();
-    await expect(toast).toBeVisible();
+    await expect(toast).toHaveCount(0);
     expect((await position(page)).top).toBe(before.top);
-    const syncBox = (await sync.boundingBox())!;
-    const toastBox = (await toast.boundingBox())!;
-    expect(toastBox.y + toastBox.height).toBeLessThanOrEqual(syncBox.y);
     await page.screenshot({
       path: `test-results/save-notifications-${test.info().project.name}.png`,
     });

@@ -38,7 +38,7 @@ function branchPosition(index: number) {
 }
 
 /** Each new branch earns six leaves, then petals for three blossoms. */
-export function SproutArt({ level = 2 }: { level?: number }) {
+export function SproutArt({ level = 2, framed = false }: { level?: number; framed?: boolean }) {
   const { t } = useTranslation();
   const titleId = useId();
   const plantLevel = Math.max(1, Math.floor(level));
@@ -69,7 +69,8 @@ export function SproutArt({ level = 2 }: { level?: number }) {
   return (
     <svg
       className="sprout-art"
-      viewBox="0 0 240 210"
+      // The square frame is centered on the illustration's backdrop at (125, 100).
+      viewBox={framed ? '5 -20 240 240' : '0 0 240 210'}
       role="img"
       aria-labelledby={titleId}
       data-level={plantLevel}

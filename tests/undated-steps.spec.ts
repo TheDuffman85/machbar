@@ -112,7 +112,7 @@ for (const language of ['en', 'de'] as const) {
     await expect(optional.locator('.count-pill')).toHaveText('4');
     await expect(optional).toContainText('A cozy home');
     await expect(hero).toContainText(labels.progress);
-    await expect(hero.locator('p span')).toHaveText('0 XP');
+    await expect(hero.locator('.hero-copy p span')).toHaveText('0 XP');
     await expect(
       page.locator('.task-copy strong').filter({ hasText: 'A scheduled step' }),
     ).toBeVisible();
@@ -155,13 +155,19 @@ for (const language of ['en', 'de'] as const) {
     await expect(optional.getByRole('button', { name: labels.undo, exact: true })).toBeVisible();
     await expect(titles).toHaveText(['Tidy a shelf', 'Water the plants', 'Read a chapter']);
     await expect(hero).toContainText(labels.progress);
-    await expect(hero.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
-    await expect(hero.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '1');
-    await expect(hero.locator('p span')).toHaveText('10 XP');
+    await expect(hero.locator('.hero-copy').getByRole('progressbar')).toHaveAttribute(
+      'aria-valuenow',
+      '0',
+    );
+    await expect(hero.locator('.hero-copy').getByRole('progressbar')).toHaveAttribute(
+      'aria-valuemax',
+      '1',
+    );
+    await expect(hero.locator('.hero-copy p span')).toHaveText('10 XP');
     await page.reload();
     await expect(optional.getByRole('button', { name: labels.undo, exact: true })).toBeVisible();
     await expect(titles).toHaveText(['Tidy a shelf', 'Water the plants', 'Read a chapter']);
-    await expect(hero.locator('p span')).toHaveText('10 XP');
+    await expect(hero.locator('.hero-copy p span')).toHaveText('10 XP');
     await context.setOffline(false);
     const saved = await readSnapshot(page);
     expect(saved.progress.xp).toBe(20);
@@ -171,7 +177,7 @@ for (const language of ['en', 'de'] as const) {
     });
     await optional.getByRole('button', { name: labels.undo, exact: true }).click();
     await expect(titles).toHaveText(['Tidy a shelf', 'Read a chapter']);
-    await expect(hero.locator('p span')).toHaveText('0 XP');
+    await expect(hero.locator('.hero-copy p span')).toHaveText('0 XP');
     expect((await readSnapshot(page)).progress.xp).toBe(10);
   });
 }
@@ -218,28 +224,28 @@ test('past days show only undated wins from that day and support undo and recomp
     'An unfinished step',
   ]);
   await expect(hero).toContainText('0 of 0 challenges');
-  await expect(hero.locator('p span')).toHaveText('10 XP');
+  await expect(hero.locator('.hero-copy p span')).toHaveText('10 XP');
   await optional.getByRole('button', { name: 'Show all steps' }).click();
   await page.getByRole('button', { name: 'Previous day', exact: true }).click();
   await expect(optional.locator('.task-copy strong')).toHaveText(['Yesterday’s win']);
   await expect(optional.getByRole('button', { name: /Show/ })).toHaveCount(0);
-  await expect(hero.locator('p span')).toHaveText('10 XP');
+  await expect(hero.locator('.hero-copy p span')).toHaveText('10 XP');
   await optional.getByRole('button', { name: 'Undo Yesterday’s win', exact: true }).click();
   await expect(optional).toHaveCount(0);
-  await expect(hero.locator('p span')).toHaveText('0 XP');
+  await expect(hero.locator('.hero-copy p span')).toHaveText('0 XP');
   expect((await readSnapshot(page)).progress.xp).toBe(10);
   await page.getByRole('button', { name: 'Next day', exact: true }).click();
   await optional.getByRole('button', { name: 'Complete Yesterday’s win', exact: true }).click();
   await expect(
     optional.getByRole('button', { name: 'Undo Yesterday’s win', exact: true }),
   ).toBeVisible();
-  await expect(hero.locator('p span')).toHaveText('20 XP');
+  await expect(hero.locator('.hero-copy p span')).toHaveText('20 XP');
   const saved = await readSnapshot(page);
   expect(saved.progress.xp).toBe(20);
   expect(saved.document.completions[completionKey('step', earlier.id, '')]?.date).toBe(today);
   await page.getByRole('button', { name: 'Previous day', exact: true }).click();
   await expect(optional).toHaveCount(0);
-  await expect(hero.locator('p span')).toHaveText('0 XP');
+  await expect(hero.locator('.hero-copy p span')).toHaveText('0 XP');
   await page.getByRole('button', { name: 'Next day', exact: true }).click();
   await expect(
     optional.getByRole('button', { name: 'Undo Yesterday’s win', exact: true }),

@@ -162,7 +162,7 @@ for (const language of ['en', 'de'] as const) {
     await card.getByRole('button', { name: complete, exact: true }).click();
     await page.getByRole('navigation').getByRole('link').first().click();
     await expect(highlight.getByRole('link', { name: /Send the application/ })).toBeVisible();
-    await expect(page.locator('.daily-hero p span')).toHaveText('10 XP');
+    await expect(page.locator('.daily-hero .hero-copy p span')).toHaveText('10 XP');
     await page.reload();
     await expect(highlight).toBeVisible();
     await expect(page.getByRole('button', { name: undo, exact: true })).toBeVisible();
@@ -251,7 +251,7 @@ test('finishing the final step highlights a goal on its completion day and undo 
   await page.getByRole('button', { name: 'Complete Final step', exact: true }).click();
   await expect(highlight).toContainText('A cozy home');
   await expect(highlight).not.toContainText('Yesterday’s goal');
-  await expect(page.locator('.daily-hero p span')).toHaveText('10 XP');
+  await expect(page.locator('.daily-hero .hero-copy p span')).toHaveText('10 XP');
   expect((await readSnapshot(page)).progress.xp).toBe(30);
   await page.getByRole('button', { name: 'Previous day', exact: true }).click();
   await expect(highlight).toContainText('Yesterday’s goal');

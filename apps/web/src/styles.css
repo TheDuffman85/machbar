@@ -22,6 +22,8 @@
   --green: #3f6550;
   --green-soft: #eaf1e9;
   --hero: #edf1e7;
+  --level-ring: #9577aa;
+  --level-ring-track: #dce3d6;
   --shadow: 0 4px 18px #33442b03;
   color-scheme: light;
 }
@@ -34,6 +36,8 @@
   --green: #aac6ac;
   --green-soft: #31483b;
   --hero: #2a3c30;
+  --level-ring: #c4acd6;
+  --level-ring-track: #425347;
   --shadow: none;
   color: #e4ece4;
   background: #17221e;
@@ -365,7 +369,8 @@ h3 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 220px;
+  min-height: 270px;
+  gap: 32px;
   background: var(--hero);
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -377,7 +382,8 @@ h3 {
 .hero-copy {
   position: relative;
   z-index: 1;
-  width: 64%;
+  flex: 1;
+  min-width: 0;
   max-width: 540px;
 }
 .small-label {
@@ -398,11 +404,18 @@ h3 {
   border-radius: 50%;
 }
 .hero-copy h2 {
+  display: grid;
   font-family: Georgia, 'Times New Roman', serif;
   font-weight: 400;
   font-size: 29px;
   letter-spacing: -0.7px;
   margin: 13px 0 18px;
+}
+.hero-copy h2 > span {
+  grid-area: 1 / 1;
+}
+.hero-headline-reserve {
+  visibility: hidden;
 }
 .hero-copy p {
   display: flex;
@@ -414,6 +427,7 @@ h3 {
 .hero-copy p span {
   color: var(--green);
   font-weight: 550;
+  font-variant-numeric: tabular-nums;
 }
 .progress-track {
   height: 7px;
@@ -441,6 +455,90 @@ h3 {
   height: 210px;
   flex-shrink: 0;
   margin: -12px -8px -14px 15px;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.hero-growth {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 240px;
+  flex-shrink: 0;
+}
+.hero-plant-ring {
+  position: relative;
+  width: 200px;
+  aspect-ratio: 1;
+  flex-shrink: 0;
+}
+.hero-level-progress {
+  position: absolute;
+  inset: 0;
+}
+.hero-level-progress svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke-width: 3;
+}
+.hero-ring-track {
+  stroke: var(--level-ring-track);
+}
+.hero-ring-fill {
+  stroke: var(--level-ring);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 700ms ease;
+}
+.daily-hero .sprout-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+.hero-level-copy {
+  width: 100%;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.hero-level-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  gap: 9px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.hero-level-summary strong {
+  font-weight: 600;
+}
+.hero-level-dot {
+  color: var(--level-ring);
+}
+.hero-total-xp {
+  min-width: 7ch;
+  text-align: left;
+  color: var(--muted);
+  white-space: nowrap;
+  font-size: 12px;
+}
+.hero-next-level {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
 }
 /* Unfold new growth and ease the whole plant back as the bush fills out. */
 .plant-growth {
@@ -743,55 +841,6 @@ h3 {
   flex-direction: column;
   gap: 18px;
 }
-.level-card {
-  padding: 20px;
-}
-.level-top {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 19px;
-}
-.level-icon {
-  background: #f0ebf6;
-  color: #9c86b0;
-  height: 42px;
-  width: 42px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.level-top .small-label {
-  font-size: 9px;
-  letter-spacing: 0;
-}
-.level-top h3 {
-  margin-top: 3px;
-  font-size: 15px;
-}
-.xp-total {
-  margin-left: auto;
-  font-size: 16px;
-  font-weight: 600;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-}
-.xp-total small {
-  color: var(--muted);
-  font-size: 9px;
-  font-weight: 400;
-  margin-top: 2px;
-}
-.level-card p {
-  font-size: 10px;
-  color: var(--muted);
-  margin-top: 9px;
-}
-.lavender-bar span {
-  background: #aa97bd;
-}
 .next-gift-card {
   padding: 22px;
   position: relative;
@@ -852,7 +901,7 @@ h3 {
   font-size: 11px;
 }
 .streak-card {
-  padding: 8px 4px 10px;
+  padding: 22px;
 }
 .streak-card h3 {
   font-size: 12px;
@@ -1796,7 +1845,7 @@ legend {
     padding-top: 43px;
   }
   .daily-hero {
-    min-height: 245px;
+    min-height: 290px;
   }
   .hero-copy h2 {
     font-size: 34px;
@@ -1869,20 +1918,12 @@ legend {
   }
   .dashboard-aside {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
     align-items: start;
     padding-top: 5px;
   }
-  .streak-card {
-    grid-column: 1 / -1;
-  }
-  .hero-copy {
-    width: 64%;
-  }
-  .daily-hero .sprout-art {
-    width: 175px;
-    height: 170px;
-    margin-right: -16px;
+  .hero-plant-ring {
+    width: 176px;
   }
   .habit-grid {
     grid-template-columns: 1fr;
@@ -1978,22 +2019,45 @@ legend {
   }
   .daily-hero {
     padding: 24px 21px;
-    min-height: 208px;
+    min-height: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 22px;
     margin-bottom: 27px;
   }
   .hero-copy {
-    width: 70%;
+    max-width: none;
   }
   .hero-copy h2 {
     font-size: 25px;
-    max-width: 270px;
+    max-width: none;
     line-height: 1.25;
     margin: 13px 0 18px;
   }
-  .daily-hero .sprout-art {
-    width: 158px;
-    height: 160px;
-    margin: 0 -25px 0 -15px;
+  .hero-growth {
+    display: grid;
+    grid-template-columns: 112px minmax(0, 1fr);
+    width: 100%;
+    gap: 18px;
+    padding-top: 18px;
+    border-top: 1px solid var(--level-ring-track);
+  }
+  .hero-plant-ring {
+    width: 112px;
+  }
+  .hero-level-copy {
+    min-width: 0;
+    max-width: 210px;
+    text-align: left;
+  }
+  .hero-level-summary {
+    justify-content: flex-start;
+    font-size: 13px;
+    gap: 7px;
+  }
+  .hero-next-level {
+    font-size: 11px;
+    min-height: 2lh;
   }
   .hero-micro {
     font-size: 9px;
@@ -2006,6 +2070,7 @@ legend {
     font-size: 9px;
   }
   .dashboard-aside {
+    grid-template-columns: 1fr;
     gap: 14px;
   }
   .task-list {
@@ -2037,30 +2102,8 @@ legend {
   .section-heading h2 {
     font-size: 14px;
   }
-  .level-card {
-    padding: 18px;
-  }
-  .level-top {
-    flex-wrap: wrap;
-  }
-  .level-top .small-label {
-    display: none;
-  }
-  .level-top h3 {
-    font-size: 14px;
-  }
-  .level-icon {
-    height: 33px;
-    width: 33px;
-    border-radius: 10px;
-  }
-  .level-icon svg {
-    width: 19px;
-  }
-  .xp-total {
-    font-size: 13px;
-  }
-  .next-gift-card {
+  .next-gift-card,
+  .streak-card {
     padding: 19px;
   }
   .next-gift-card h3 {
@@ -2225,14 +2268,8 @@ legend {
   .daily-hero {
     padding: 21px 18px;
   }
-  .hero-copy {
-    width: 75%;
-  }
-  .daily-hero .sprout-art {
-    width: 125px;
-    height: 145px;
-    margin-left: -30px;
-    margin-right: -28px;
+  .hero-growth {
+    gap: 12px;
   }
   .hero-copy h2 {
     font-size: 23px;
@@ -2240,16 +2277,11 @@ legend {
   .xp-tag {
     display: none;
   }
-  .level-top {
-    gap: 6px;
-  }
   .dashboard-aside {
     gap: 10px;
   }
-  .next-gift-card {
-    padding: 15px;
-  }
-  .level-card {
+  .next-gift-card,
+  .streak-card {
     padding: 15px;
   }
   .theme-options {
@@ -2283,6 +2315,9 @@ legend {
 .interval-fields > label:nth-child(3),
 .interval-fields > p {
   grid-column: 1 / -1;
+}
+.period-habits {
+  margin-top: 29px;
 }
 .period-habits > .form-hint {
   margin: -4px 0 14px;

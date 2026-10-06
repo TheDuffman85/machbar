@@ -577,12 +577,9 @@ export function App() {
     timezone: string,
   ) {
     if (!snapshot) return;
-    const completed =
-      snapshot.document.completions[operationKey(snapshot.document, type, id, date)]?.completed;
     try {
       const next = await toggleCompletion(type, id, date, timezone, snapshot.document.userId);
       queryClient.setQueryData(['machbar'], next);
-      if (!completed) setToast(t('celebration'));
       if (navigator.onLine) void sync();
     } catch (e) {
       setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
@@ -1107,7 +1104,15 @@ function Today() {
             <span className="tiny-dot" />
             {t('dailyProgress')}
           </span>
-          <h2>{t(completed === total && total ? 'allDone' : 'keepGoing')}</h2>
+          <h2>
+            <span className="hero-headline-reserve" aria-hidden="true">
+              {t('keepGoing')}
+            </span>
+            <span className="hero-headline-reserve" aria-hidden="true">
+              {t('allDone')}
+            </span>
+            <span>{t(completed === total && total ? 'allDone' : 'keepGoing')}</span>
+          </h2>
           <p>
             {t('completedOf', { done: completed, total })}
             <span>
@@ -1117,7 +1122,48 @@ function Today() {
           <Bar value={completed} max={total} />
           <div className="hero-micro">{t('littleNote')}</div>
         </div>
-        <SproutArt key={doc.userId} level={progress.level} />
+        <div className="hero-growth">
+          <div className="hero-plant-ring">
+            <div
+              className="hero-level-progress"
+              role="progressbar"
+              aria-label={`${t('level', { level: progress.level })} · ${t('progress')}`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress.levelXp}
+              aria-valuetext={`${progress.levelXp} / 100 XP · ${t('xpToNext', { xp: 100 - progress.levelXp })}`}
+            >
+              <svg viewBox="0 0 240 240" aria-hidden="true">
+                <circle className="hero-ring-track" cx="120" cy="120" r="110" />
+                <circle
+                  className="hero-ring-fill"
+                  cx="120"
+                  cy="120"
+                  r="110"
+                  pathLength="100"
+                  strokeDasharray="100 100"
+                  strokeDashoffset={100 - progress.levelXp}
+                  visibility={progress.levelXp ? 'visible' : 'hidden'}
+                  transform="rotate(-90 120 120)"
+                />
+              </svg>
+            </div>
+            <SproutArt key={doc.userId} level={progress.level} framed />
+          </div>
+          <div className="hero-level-copy">
+            <div className="hero-level-summary">
+              <strong>{t('level', { level: progress.level })}</strong>
+              <span className="hero-level-dot" aria-hidden="true">
+                ·
+              </span>
+              <span className="hero-total-xp">
+                <span className="visually-hidden">{t('totalXp')}: </span>
+                {progress.xp} XP
+              </span>
+            </div>
+            <div className="hero-next-level">{t('xpToNext', { xp: 100 - progress.levelXp })}</div>
+          </div>
+        </div>
       </section>
       <div className="dashboard-grid">
         <div className="challenge-column">
@@ -1329,22 +1375,23 @@ function Today() {
           )}
         </div>
         <aside className="dashboard-aside" aria-label={t('progress')}>
-          <section className="panel level-card">
-            <div className="level-top">
-              <span className="level-icon">
-                <Sparkles size={23} />
-              </span>
-              <div>
-                <span className="small-label">{t('keepGoing')}</span>
-                <h3>{t('level', { level: progress.level })}</h3>
-              </div>
-              <span className="xp-total">
-                {progress.xp}
-                <small>XP</small>
-              </span>
-            </div>
-            <Bar value={progress.levelXp} className="lavender-bar" />
-            <p>{t('xpToNext', { xp: 100 - progress.levelXp })}</p>
+          <section className="panel streak-card">
+            <h3>
+              <Flame size={18} />
+              {t('yourStreaks')}
+            </h3>
+            {doc.habits
+              .filter((h) => !h.archivedAt)
+              .map((h) => (
+                <div key={h.id}>
+                  <span>{h.title}</span>
+                  <strong>
+                    <Flame size={13} />
+                    {progress.habits[h.id]!.current}
+                  </strong>
+                </div>
+              ))}
+            <p>{t('streakExplanation')}</p>
           </section>
           <section className="panel next-gift-card">
             <span className="gift-illustration">
@@ -1375,24 +1422,6 @@ function Today() {
               {t('viewRewards')}
               <ChevronRight size={16} />
             </NavLink>
-          </section>
-          <section className="streak-card">
-            <h3>
-              <Flame size={18} />
-              {t('yourStreaks')}
-            </h3>
-            {doc.habits
-              .filter((h) => !h.archivedAt)
-              .map((h) => (
-                <div key={h.id}>
-                  <span>{h.title}</span>
-                  <strong>
-                    <Flame size={13} />
-                    {progress.habits[h.id]!.current}
-                  </strong>
-                </div>
-              ))}
-            <p>{t('streakExplanation')}</p>
           </section>
         </aside>
       </div>
