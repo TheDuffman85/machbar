@@ -45,6 +45,26 @@ export const recurrenceSchema = z
   })
   .strict();
 export type Recurrence = z.infer<typeof recurrenceSchema>;
+export const iconChoices = [
+  'leaf',
+  'target',
+  'heart',
+  'star',
+  'book',
+  'dumbbell',
+  'bike',
+  'footprints',
+  'droplet',
+  'coffee',
+  'moon',
+  'sun',
+  'music',
+  'pencil',
+  'briefcase',
+  'sprout',
+] as const;
+export const iconSchema = z.enum(iconChoices);
+export type EntityIcon = z.infer<typeof iconSchema>;
 export const habitInputSchema = z
   .object({
     title,
@@ -53,6 +73,7 @@ export const habitInputSchema = z
     recurrence: recurrenceSchema.nullable().optional(),
     startDate: dateSchema.optional(),
     color: z.enum(['sage', 'peach', 'lavender', 'blue']).default('sage'),
+    icon: iconSchema.optional(),
   })
   .strict();
 export const goalInputSchema = z
@@ -60,10 +81,11 @@ export const goalInputSchema = z
     title,
     description: z.string().max(500).default(''),
     color: z.enum(['sage', 'peach', 'lavender', 'blue']).default('lavender'),
+    icon: iconSchema.optional(),
   })
   .strict();
 export const stepInputSchema = z
-  .object({ title, date: dateSchema.nullable().default(null) })
+  .object({ title, date: dateSchema.nullable().default(null), icon: iconSchema.optional() })
   .strict();
 const scheduleSchema = z.object({
   from: dateSchema,

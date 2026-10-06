@@ -1,4 +1,10 @@
 import { defineConfig, devices } from '@playwright/test';
+
+const chromiumLaunchOptions = {
+  executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
+  args: ['--host-resolver-rules=MAP machbar.test 127.0.0.1'],
+};
+
 export default defineConfig({
   testDir: './tests',
   fullyParallel: false,
@@ -11,17 +17,29 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     locale: 'en-US',
-    launchOptions: {
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
-      args: ['--host-resolver-rules=MAP machbar.test 127.0.0.1'],
-    },
   },
   projects: [
     {
       name: 'desktop',
-      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } },
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1440, height: 1000 },
+        launchOptions: chromiumLaunchOptions,
+      },
     },
-    { name: 'mobile', use: { ...devices['Pixel 7'], defaultBrowserType: 'chromium' } },
+    {
+      name: 'mobile',
+      use: {
+        ...devices['Pixel 7'],
+        defaultBrowserType: 'chromium',
+        launchOptions: chromiumLaunchOptions,
+      },
+    },
+    {
+      name: 'iphone',
+      testMatch: /mobile-safari\.spec\.ts/,
+      use: { ...devices['iPhone 17 Pro Max'] },
+    },
   ],
   webServer: {
     command: 'pnpm build && node tests/server.mjs',

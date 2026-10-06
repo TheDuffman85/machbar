@@ -83,6 +83,73 @@ describe('document synchronization API', () => {
       JSON.parse(await readFile(join(directory, `${userId}.json`), 'utf8')).completions,
     ).toEqual(doc.completions);
   });
+  it('roundtrips icons on habits, goals, and steps and rejects unknown icons', async () => {
+    const doc = (await snapshot()).document;
+    const habitId = randomUUID();
+    const goalId = randomUUID();
+    const stepId = randomUUID();
+    mutateDocument(
+      doc,
+      '/api/habits',
+      'POST',
+      { title: 'Read', weekdays: [1], icon: 'book' },
+      habitId,
+    );
+    mutateDocument(doc, '/api/goals', 'POST', { title: 'Run', icon: 'footprints' }, goalId);
+    mutateDocument(
+      doc,
+      `/api/goals/${goalId}/steps`,
+      'POST',
+      { title: 'Train', icon: 'dumbbell' },
+      stepId,
+    );
+    expect((await sync(doc)).statusCode).toBe(200);
+    const saved = (await snapshot()).document;
+    expect(saved.habits[0]!.icon).toBe('book');
+    expect(saved.goals[0]!.icon).toBe('footprints');
+    expect(saved.goals[0]!.steps[0]!.icon).toBe('dumbbell');
+    const invalid = structuredClone(saved);
+    Object.assign(invalid.goals[0]!.steps[0]!, { icon: 'unsupported' });
+    expect((await sync(invalid)).statusCode).toBe(400);
+    expect((await snapshot()).document).toEqual(saved);
+  });
+  it('blocks all creation paths while allowing existing profiles to switch and sync', async () => {
+    await sync((await snapshot()).document);
+    await app.close();
+    app = await buildServer({
+      config: {
+        ...readConfig({ APP_URL: origin, DISABLE_USER_CREATION: 'true' }),
+        dataDir: directory,
+        webDir: join(directory, 'no-web'),
+      },
+      // The API must enforce the flag even with a supplied store.
+      store: new JsonStore(directory),
+    });
+    const missing = randomUUID();
+    const denied = await app.inject({
+      url: '/api/bootstrap',
+      headers: { 'x-machbar-user': missing },
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json().code).toBe('USER_CREATION_DISABLED');
+    const directWrite = await sync(createUser(missing));
+    expect(directWrite.statusCode).toBe(403);
+    expect(directWrite.json().code).toBe('USER_CREATION_DISABLED');
+    const switchTo = (id: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/local-user',
+        headers: { origin, 'x-machbar-user': id },
+        payload: { userId: id },
+      });
+    expect((await switchTo(missing)).json().code).toBe('USER_NOT_FOUND');
+    expect((await switchTo(userId)).statusCode).toBe(200);
+    const existing = (await snapshot()).document;
+    existing.preferences.name = 'Still editable';
+    expect((await sync(existing)).statusCode).toBe(200);
+    expect((await snapshot()).document.preferences.name).toBe('Still editable');
+    expect(await readdir(directory)).toEqual([`${userId}.json`]);
+  });
   it('bootstraps locally managed profiles without calculated progress or cookies', async () => {
     const response = await app.inject({
       url: '/api/bootstrap',
@@ -117,7 +184,7 @@ describe('document synchronization API', () => {
       app.inject({
         method: 'POST',
         url: '/api/local-user',
-        headers: { origin, 'x-machbar-user': userId },
+        headers: { origin, 'x-machbar-user': id },
         payload: { userId: id },
       });
     expect((await switchTo(userId)).statusCode).toBe(200);

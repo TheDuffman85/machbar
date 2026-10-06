@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { DomainError, localUserIdSchema } from '@machbar/shared';
 import type { Config } from './config.js';
+import { isApiRequest } from './api-request.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -20,9 +21,13 @@ export function registerIdentity(app: FastifyInstance, config: Config) {
       if (!sameOrigin || request.headers['sec-fetch-site'] === 'cross-site')
         throw new DomainError('ORIGIN_REJECTED', 403);
     }
-    if (request.url.startsWith('/api/')) {
+    if (isApiRequest(request)) {
       const identity = localUserIdSchema.safeParse(request.headers['x-machbar-user']);
-      if (!identity.success) throw new DomainError('INVALID_IDENTITY', 400);
+      if (!identity.success)
+        throw new DomainError(
+          'INVALID_IDENTITY',
+          request.headers['x-machbar-user'] === undefined ? 401 : 400,
+        );
       request.userId = identity.data;
     }
   });

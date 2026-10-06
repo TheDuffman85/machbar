@@ -288,3 +288,54 @@ test('LAN HTTP offers QR uploads when the camera is unavailable and rejects unre
   await expect(page.getByLabel('Existing user ID')).toBeEmpty();
   await expect(page.getByRole('button', { name: 'Switch profile', exact: true })).toBeDisabled();
 });
+
+test('disabled user creation offers only existing profiles and preserves normal use after switching', async ({
+  page,
+  request,
+  browser,
+}) => {
+  await onboard(page, 'Existing friend');
+  const id = (await readSnapshot(page)).document.userId;
+  await request.post('/test/config', {
+    headers: { origin: base },
+    data: { disableUserCreation: true },
+  });
+  const freshContext = await browser.newContext({ locale: 'en-US' });
+  try {
+    const fresh = await freshContext.newPage();
+    await fresh.goto(base);
+    await expect(
+      fresh.getByText('New profiles are disabled. Use an existing profile to continue.'),
+    ).toBeVisible();
+    await expect(fresh.getByRole('dialog')).toHaveCount(0);
+    await expect(fresh.getByLabel('What should we call you?')).toHaveCount(0);
+    await expect(fresh.getByLabel('Current user ID')).toHaveCount(0);
+    await fresh.getByLabel('Existing user ID').fill(crypto.randomUUID());
+    await fresh.getByRole('button', { name: 'Switch profile', exact: true }).click();
+    await expect(fresh.getByRole('alert')).toContainText('No saved profile');
+    await fresh.getByLabel('Existing user ID').fill(id);
+    await fresh.getByRole('button', { name: 'Switch profile', exact: true }).click();
+    await expect(fresh.getByRole('heading', { name: 'Hey, Existing friend' })).toBeVisible();
+    await fresh.reload();
+    await expect(fresh.getByRole('heading', { name: 'Hey, Existing friend' })).toBeVisible();
+    expect((await readSnapshot(fresh)).document.userId).toBe(id);
+  } finally {
+    await freshContext.close();
+  }
+});
+
+test('an unfinished cached profile cannot resume onboarding after creation is disabled', async ({
+  page,
+  request,
+}) => {
+  await page.goto(base);
+  await expect(page.getByLabel('What should we call you?')).toBeVisible();
+  await request.post('/test/config', {
+    headers: { origin: base },
+    data: { disableUserCreation: true },
+  });
+  await page.reload();
+  await expect(page.getByLabel('Existing user ID')).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByLabel('What should we call you?')).toHaveCount(0);
+});

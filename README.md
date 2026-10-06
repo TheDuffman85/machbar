@@ -50,7 +50,9 @@ pnpm build
 NODE_ENV=production pnpm start
 ```
 
-`APP_URL` defaults to `http://localhost:3000`. Optional server variables: `PORT` (3000), `HOST` (0.0.0.0), `DATA_DIR` (`./data`), and `WEB_DIR` (`./apps/web/dist`). Relative data/web paths resolve from the repository root so development and production share the same local data directory.
+`APP_URL` defaults to `http://localhost:3000`. Optional server variables: `PORT` (3000), `HOST` (0.0.0.0), `DATA_DIR` (`./data`), and `WEB_DIR` (`./apps/web/dist`). Set `DISABLE_USER_CREATION=true` to prevent new profiles from being created. Visitors must enter an existing saved user ID or scan its QR code; existing profiles can still edit and sync their data. Both bootstrap and sync enforce this restriction on the server. The default is `false`. Save at least one profile and keep its user ID before enabling this mode, then restart the server (or recreate the Docker Compose container).
+
+Relative data/web paths resolve from the repository root so development and production share the same local data directory.
 
 Settings shows the installed frontend version and build date. Every Vite build (including Docker builds) appends a UTC timestamp with millisecond precision to the root package version, for example `1.0.0+20261006120000123`. The build date uses the selected language and timezone. Both values are embedded in the frontend, so they stay accurate offline and change when a new build is installed. Development generates them when Vite starts.
 
@@ -82,22 +84,28 @@ Browser storage is a local cache, not a backup. Unsynced changes depend on that 
 
 ## API contract
 
-All `/api/*` routes use the browser UUID sent in `X-Machbar-User`. Only UUIDs are accepted. The backend manages profile identity, validates synchronized documents, and persists them atomically; task rules and all derived progress run in the client.
+All `/api/*` routes require the profile's UUID access key in `X-Machbar-User`. Missing credentials return 401; malformed UUIDs return 400. IDs in a URL or request body do not authenticate a request. Reads and writes are scoped to the header identity. The backend manages profile identity, validates synchronized documents, and persists them atomically; task rules and all derived progress run in the client.
 
-| Route                  | Purpose                                              |
-| ---------------------- | ---------------------------------------------------- |
-| `GET /api/bootstrap`   | Stored user document and daily-history configuration |
-| `POST /api/local-user` | Load an existing browser profile (`{ userId }`)      |
-| `PUT /api/sync`        | Save a complete merged `UserDocument`                |
-| `GET /health`          | Process health                                       |
+| Route                  | Purpose                                                      |
+| ---------------------- | ------------------------------------------------------------ |
+| `GET /api/bootstrap`   | Stored user document and daily-history configuration         |
+| `POST /api/local-user` | Load an existing profile; `{ userId }` must match the header |
+| `PUT /api/sync`        | Save a complete merged `UserDocument`                        |
+| `GET /health`          | Process health                                               |
 
 Bootstrap, profile switching, and sync return `{ document, dailyHistoryDays }`. The client calculates today, XP, levels, streaks, achievements, goal progress, gift availability, and plant growth.
+
+To switch profiles, send the **target** profile's ID in both `X-Machbar-User` and `{ userId }`. Mismatches return `ACCOUNT_CHANGED` without loading or modifying either profile. Possession of a profile's UUID grants access to that profile; keep IDs and QR codes private and use HTTPS for public deployments.
+
+Every `/api/*` request, including failed requests and unknown API paths, counts toward rate limits before identity checks and JSON parsing. Defaults per **60-second fixed window** are **300 requests per IP**, **120 per user ID** (across devices), and **20 per IP without a valid user ID**. Missing and malformed IDs share the anonymous allowance. The IP limit also applies to valid IDs, so rotating IDs cannot bypass it. Exceeded limits return 429 with `{ "code": "RATE_LIMITED" }` and a `Retry-After` header in seconds; `/health` and static assets remain available.
+
+Configure `RATE_LIMIT_WINDOW_SECONDS` (1–86400), `RATE_LIMIT_MAX_PER_IP`, `RATE_LIMIT_MAX_PER_USER`, and `RATE_LIMIT_MAX_ANONYMOUS` through `.env` or the server environment, then restart the server or recreate the Compose container. Request limits must be positive integers. Counters live in memory, reset on restart or window expiry, and track at most 10,000 keys; new keys are denied until expiry if that capacity is reached. Run one application instance. IP limits use the connection address and ignore forwarding headers. Behind a reverse proxy, clients share the proxy's IP allowance; size that allowance for your deployment and enforce individual client IP limits at the proxy.
 
 Sync sends `If-Match: <server revision>`, `X-Machbar-User: <userId>`, a same-origin `Origin`, and the complete document as JSON. Its `userId` and `revision` must match the identity header and expected revision. The server saves only if its current revision matches, then increments the revision. On `DOCUMENT_CONFLICT`, the client fetches the latest document, merges again, and retries. Failed or interrupted requests leave local pending changes intact. An acknowledgment clears only the captured batch; changes made during a request remain pending and are rebased onto the saved document. Sync accepts documents up to 8 MiB.
 
 The stored document remains schema version 1. It includes task IDs, schedule history, archive/claim timestamps, completion records and operation receipts. Existing completion identities remain habit/date or goal-step ID. Period habits use habit/period-start identities and optional `periodStart` metadata while retaining the actual completion date and timezone; progress is derived from completed records, so retries do not award duplicate XP.
 
-Errors return `{ "code": "STABLE_ERROR_CODE" }`. Common codes include `VALIDATION_ERROR`/`INVALID_IDENTITY` (400), `ORIGIN_REJECTED` (403), `NOT_FOUND`/`USER_NOT_FOUND` (404), `DOCUMENT_CONFLICT`/`ACCOUNT_CHANGED` (409), `REVISION_REQUIRED` (428), and `DATA_CORRUPT` (500). UI messages are translated.
+Errors return `{ "code": "STABLE_ERROR_CODE" }`. Common codes include `VALIDATION_ERROR`/`INVALID_IDENTITY` (400), `INVALID_IDENTITY` for missing credentials (401), `ORIGIN_REJECTED` (403), `NOT_FOUND`/`USER_NOT_FOUND` (404), `DOCUMENT_CONFLICT`/`ACCOUNT_CHANGED` (409), `REVISION_REQUIRED` (428), `RATE_LIMITED` (429), and `DATA_CORRUPT` (500). UI messages are translated.
 
 Deploy the client and API together. For the interval update, close all open Machbar tabs/windows and reopen the app so the updated client activates before using new schedules. Existing documents, browser caches and pending daily checkoffs remain compatible; no data reset is needed. The old feature-specific mutation endpoints have been removed. When upgrading from the completion-only client, close all open Machbar tabs/windows and reopen the app so its waiting service worker can activate and migrate the local cache, including unsynced checkoffs. Browser data must remain intact during the upgrade.
 
@@ -127,7 +135,7 @@ This overwrites matching user files; restore into a fresh volume if you need an 
 
 ```bash
 pnpm check
-pnpm exec playwright install chromium
+pnpm exec playwright install chromium webkit
 pnpm test:e2e
 pnpm test:docker
 docker compose config --quiet
@@ -135,9 +143,13 @@ docker compose up -d --build
 curl http://localhost:3000/health
 ```
 
-Browser tests exercise the production build on an isolated temporary data directory at port 3100. They cover desktop/mobile layouts, accessibility, all offline feature mutations, offline reload and synchronization, automatic conflicts, API outages, interrupted requests, cache upgrades, multiple tabs, and account switching. An existing Chromium executable can be selected through `PLAYWRIGHT_CHROMIUM_EXECUTABLE`. Production does not contain the test reset or seed routes.
+Browser tests exercise the production build on an isolated temporary data directory at port 3100. They cover desktop/mobile layouts, accessibility, all offline feature mutations, offline reload and synchronization, automatic conflicts, API outages, interrupted requests, cache upgrades, multiple tabs, and account switching. The `iphone` project uses WebKit with iPhone 17 Pro Max emulation to check mobile form sizing and menu navigation. An existing Chromium executable can be selected through `PLAYWRIGHT_CHROMIUM_EXECUTABLE`. Production does not contain the test reset or seed routes.
 
 Docker tests build an isolated image and verify permission repair with existing root-owned profiles, a real API sync, the application's UID/GID and lack of effective capabilities, direct non-root startup, custom data directories, symlink preservation, and unwritable-mount errors. They require a local Linux Docker daemon without user namespace remapping and do not publish ports or use your application data.
+
+## Challenge icons
+
+Choose an icon when creating or editing a habit, goal, or step. Icons appear on the Today page and in their lists, keep the selected color (steps use their goal’s color), and sync across devices. Existing items keep their leaf or target icon until you select another.
 
 ## Plant growth
 

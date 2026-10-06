@@ -6,6 +6,8 @@ import { DomainError, localUserIdSchema, syncDocumentSchema } from '@machbar/sha
 import { type Config, readConfig } from './config.js';
 import { JsonStore } from './store.js';
 import { registerIdentity } from './identity.js';
+import { registerRateLimits } from './rate-limit.js';
+import { isApiRequest } from './api-request.js';
 
 export async function buildServer(
   options: { config?: Config; store?: JsonStore; logger?: boolean } = {},
@@ -49,9 +51,10 @@ export async function buildServer(
       'Content-Security-Policy',
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     );
-    if (request.url.startsWith('/api/')) reply.header('Cache-Control', 'no-store');
+    if (isApiRequest(request)) reply.header('Cache-Control', 'no-store');
     return payload;
   });
+  registerRateLimits(app, config);
   registerIdentity(app, config);
   const bootstrap = (document: Awaited<ReturnType<JsonStore['read']>>) => ({
     document,
@@ -64,10 +67,13 @@ export async function buildServer(
     return Number(value);
   };
   app.get('/health', async () => ({ status: 'ok' }));
-  app.get('/api/bootstrap', async (request) => bootstrap(await store.read(request.userId)));
+  app.get('/api/bootstrap', async (request) =>
+    bootstrap(await store.read(request.userId, !config.disableUserCreation)),
+  );
   app.post('/api/local-user', async (request) => {
     const { userId } = z.object({ userId: localUserIdSchema }).strict().parse(request.body);
-    return bootstrap(await store.readExisting(userId));
+    if (userId !== request.userId) throw new DomainError('ACCOUNT_CHANGED', 409);
+    return bootstrap(await store.readExisting(request.userId));
   });
   app.put('/api/sync', async (request) => {
     const document = syncDocumentSchema.parse(request.body);
@@ -80,6 +86,7 @@ export async function buildServer(
         Object.assign(doc, document);
       },
       expectedRevision,
+      !config.disableUserCreation,
     );
     return bootstrap(result.document);
   });
@@ -99,7 +106,7 @@ export async function buildServer(
     app.setNotFoundHandler((request, reply) => {
       if (
         request.method === 'GET' &&
-        !request.url.startsWith('/api/') &&
+        !isApiRequest(request) &&
         !request.url.startsWith('/auth/') &&
         !request.url.split('?')[0]!.includes('.')
       )

@@ -7,16 +7,23 @@ import { readConfig } from '../apps/api/dist/config.js';
 import { userDocumentSchema } from '../packages/shared/dist/index.js';
 const directory = await mkdtemp(join(tmpdir(), 'machbar-browser-'));
 const store = new JsonStore(directory);
-const app = await buildServer({
-  config: {
-    ...readConfig({ APP_URL: 'http://localhost:3100' }),
-    dataDir: directory,
-    webDir: resolve('apps/web/dist'),
-  },
-  store,
-});
+const config = {
+  ...readConfig({
+    APP_URL: 'http://localhost:3100',
+    // Browser tests share one IP; rate enforcement has dedicated API tests.
+    RATE_LIMIT_MAX_PER_IP: '100000',
+  }),
+  dataDir: directory,
+  webDir: resolve('apps/web/dist'),
+};
+const app = await buildServer({ config, store });
 // Test-only fixtures. These routes are never included in the production server.
+app.post('/test/config', async (request) => {
+  config.disableUserCreation = request.body.disableUserCreation === true;
+  return { ok: true };
+});
 app.post('/test/reset', async () => {
+  config.disableUserCreation = false;
   await rm(directory, { recursive: true, force: true });
   await mkdir(directory, { recursive: true });
   return { ok: true };

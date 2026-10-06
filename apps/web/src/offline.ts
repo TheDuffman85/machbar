@@ -223,7 +223,18 @@ function checkIdentity(id: string) {
 export async function loadEntry(): Promise<Entry> {
   const id = getLocalUserId();
   const cached = await readEntry(id);
-  if (cached) return cached;
+  if (cached) {
+    // A revision-zero baseline has never been saved to the server. Recheck it
+    // before resuming onboarding so a changed creation policy also applies here.
+    if (cached.base.revision === 0 && navigator.onLine) {
+      try {
+        await request<SyncSnapshot>('/api/bootstrap', { headers: { 'X-Machbar-User': id } });
+      } catch (error) {
+        if (error instanceof ApiError && error.code === 'USER_CREATION_DISABLED') throw error;
+      }
+    }
+    return cached;
+  }
   const snapshot = await request<SyncSnapshot>('/api/bootstrap', {
     headers: { 'X-Machbar-User': id },
   });
@@ -405,7 +416,7 @@ export async function switchLocalUser(userId: string): Promise<Entry> {
   if ((await readEntry(id))?.queue.length) throw new ApiError('PENDING_CHANGES', 409);
   const snapshot = await request<SyncSnapshot>('/api/local-user', {
     method: 'POST',
-    headers: { 'X-Machbar-User': id },
+    headers: { 'X-Machbar-User': parsed.data },
     body: JSON.stringify({ userId: parsed.data }),
   });
   if (snapshot.document.userId !== parsed.data) throw new ApiError('ACCOUNT_CHANGED', 409);

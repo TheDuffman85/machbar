@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { SproutArt } from './Plant';
+import { EntityIcon, IconPicker } from './EntityIcon';
 import { UserIdentity } from './UserIdentity';
 import { localUserIdKey } from './identity';
 import { lockPageScroll } from './scrollLock';
@@ -59,6 +60,7 @@ import {
   alignAnchor,
   scheduleChangeDate,
   type HabitSchedule,
+  type EntityIcon as IconName,
   type Recurrence,
   localDate,
   scheduled,
@@ -170,20 +172,23 @@ function ProfileMenu() {
   useEffect(() => setOpen(false), [location, snapshot.document.userId]);
   useEffect(() => {
     if (!open) return;
-    ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-    const dismiss = (event: PointerEvent) => {
+    ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus({ preventScroll: true });
+    const dismiss = (event: PointerEvent | FocusEvent) => {
       if (!ref.current?.contains(event.target as Node)) setOpen(false);
     };
     document.addEventListener('pointerdown', dismiss);
-    return () => document.removeEventListener('pointerdown', dismiss);
+    // Safari can blur a menu item with no relatedTarget during a tap. Wait for
+    // actual focus outside the menu so its links survive until their click.
+    document.addEventListener('focusin', dismiss);
+    return () => {
+      document.removeEventListener('pointerdown', dismiss);
+      document.removeEventListener('focusin', dismiss);
+    };
   }, [open]);
   return (
     <div
       className="profile-menu"
       ref={ref}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
-      }}
       onKeyDown={(event) => {
         if (event.key === 'Escape' && open) {
           event.preventDefault();
@@ -216,7 +221,7 @@ function ProfileMenu() {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? 'profile-menu' : undefined}
-        onClick={() => setOpen(!open)}
+        onClick={() => setOpen((current) => !current)}
       >
         <Avatar
           seed={snapshot.document.preferences.avatarSeed}
@@ -592,7 +597,7 @@ export function App() {
     }
   }
   async function changeUser(userId: string) {
-    if (busy || !snapshot) return;
+    if (busy) return;
     setBusy(true);
     try {
       queryClient.setQueryData(['machbar'], await switchLocalUser(userId));
@@ -612,6 +617,20 @@ export function App() {
     </>
   );
   if (!entry || !snapshot) {
+    if (query.error instanceof ApiError && query.error.code === 'USER_CREATION_DISABLED') {
+      return (
+        <main className="profile-selection">
+          <Brand />
+          <p className="muted">{t('USER_CREATION_DISABLED')}</p>
+          <UserIdentity
+            userId={null}
+            disabled={busy || !online}
+            pending={false}
+            onSwitch={changeUser}
+          />
+        </main>
+      );
+    }
     return (
       <main className="welcome-screen">
         <Brand />
@@ -949,7 +968,7 @@ function TaskRow({
   date,
   timezone,
   color = 'sage',
-  icon: Icon = Leaf,
+  icon,
   children,
   disabled = false,
 }: {
@@ -960,7 +979,7 @@ function TaskRow({
   date: string;
   timezone: string;
   color?: string;
-  icon?: LucideIcon;
+  icon?: IconName;
   children?: ReactNode;
   disabled?: boolean;
 }) {
@@ -979,7 +998,7 @@ function TaskRow({
   return (
     <div className={`task-row ${completed ? 'checked' : ''}`}>
       <span className={`task-icon ${color}`}>
-        <Icon size={22} />
+        <EntityIcon name={icon ?? (type === 'habit' ? 'leaf' : 'target')} size={22} />
       </span>
       <div className="task-copy">
         <strong>{title}</strong>
@@ -1222,7 +1241,7 @@ function Today() {
               {completedGoals.map((goal) => (
                 <NavLink className="completed-goal" to="/goals" key={goal.id}>
                   <span className={`task-icon ${goal.color}`}>
-                    <CircleCheck size={23} aria-hidden="true" />
+                    <EntityIcon name={goal.icon ?? 'target'} />
                   </span>
                   <span className="task-copy">
                     <strong>{goal.title}</strong>
@@ -1254,6 +1273,7 @@ function Today() {
                   date={date}
                   timezone={scheduleFor(h, date)!.timezone}
                   color={h.color}
+                  icon={h.icon}
                 />
               ))
             ) : (
@@ -1293,6 +1313,7 @@ function Today() {
                       date={date}
                       timezone={occurrence.timezone}
                       color={h.color}
+                      icon={h.icon}
                     />
                   );
                 })}
@@ -1320,7 +1341,7 @@ function Today() {
                   date={date}
                   timezone={doc.preferences.timezone}
                   color={goal.color}
-                  icon={Target}
+                  icon={step.icon}
                 />
               ))
             ) : (
@@ -1352,7 +1373,7 @@ function Today() {
                     date={date}
                     timezone={doc.preferences.timezone}
                     color={goal.color}
-                    icon={Target}
+                    icon={goal.icon}
                   />
                 ))}
                 {optionalSteps.map(({ step, goal }) => (
@@ -1365,7 +1386,7 @@ function Today() {
                     date={date}
                     timezone={doc.preferences.timezone}
                     color={goal.color}
-                    icon={Target}
+                    icon={step.icon}
                   />
                 ))}
               </div>
@@ -1500,7 +1521,7 @@ function Goals() {
               <section className="panel goal-card" key={goal.id}>
                 <div className="goal-card-heading">
                   <span className={`task-icon ${goal.color}`}>
-                    <Target size={23} />
+                    <EntityIcon name={goal.icon ?? 'target'} />
                   </span>
                   <div>
                     <h2>{goal.title}</h2>
@@ -1567,7 +1588,7 @@ function Goals() {
                             date={today}
                             timezone={doc.preferences.timezone}
                             color={goal.color}
-                            icon={Target}
+                            icon={step.icon}
                             disabled={
                               !!(goal.archivedAt || step.archivedAt) &&
                               !doc.completions[completionKey('step', step.id, '')]
@@ -1703,7 +1724,7 @@ function Habits() {
             <section className="panel habit-card" key={h.id}>
               <div className="goal-card-heading">
                 <span className={`task-icon ${h.color}`}>
-                  <Leaf size={23} />
+                  <EntityIcon name={h.icon ?? 'leaf'} />
                 </span>
                 <div>
                   <h2>{h.title}</h2>
@@ -2337,6 +2358,9 @@ function ChallengeForm({
   const [color, setColor] = useState<(typeof colors)[number]>(
     initial && 'color' in initial ? initial.color : modal.kind === 'goal' ? 'lavender' : 'sage',
   );
+  const [icon, setIcon] = useState<IconName>(
+    initial?.icon ?? (modal.kind === 'habit' ? 'leaf' : 'target'),
+  );
   const [weekdays, setWeekdays] = useState(
     modal.kind === 'habit' && modal.habit
       ? modal.habit.schedules.at(-1)!.weekdays
@@ -2409,6 +2433,7 @@ function ChallengeForm({
         title,
         description,
         color,
+        icon,
         weekdays: repeat === 'weekdays' ? weekdays : [0, 1, 2, 3, 4, 5, 6],
         recurrence:
           repeat === 'daily' || repeat === 'weekdays'
@@ -2427,11 +2452,11 @@ function ChallengeForm({
     } else if (modal.kind === 'goal') {
       path = `/api/goals${modal.goal ? `/${modal.goal.id}` : ''}`;
       method = modal.goal ? 'PATCH' : 'POST';
-      body = { title, description, color };
+      body = { title, description, color, icon };
     } else if (modal.kind === 'step') {
       path = modal.step ? `/api/steps/${modal.step.id}` : `/api/goals/${modal.goal.id}/steps`;
       method = modal.step ? 'PATCH' : 'POST';
-      body = { title, date: date || null };
+      body = { title, date: date || null, icon };
     } else {
       path = '/api/gifts';
       body = {
@@ -2511,6 +2536,13 @@ function ChallengeForm({
             </div>
           </fieldset>
         </>
+      )}
+      {modal.kind !== 'gift' && (
+        <IconPicker
+          value={icon}
+          color={modal.kind === 'step' ? modal.goal.color : color}
+          onChange={setIcon}
+        />
       )}
       {modal.kind === 'habit' && (
         <>

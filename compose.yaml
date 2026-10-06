@@ -7,6 +7,11 @@ services:
     environment:
       APP_URL: ${APP_URL:-http://localhost:3000}
       DAILY_HISTORY_DAYS: ${DAILY_HISTORY_DAYS:-3}
+      DISABLE_USER_CREATION: ${DISABLE_USER_CREATION:-false}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+      RATE_LIMIT_MAX_PER_IP: ${RATE_LIMIT_MAX_PER_IP:-300}
+      RATE_LIMIT_MAX_PER_USER: ${RATE_LIMIT_MAX_PER_USER:-120}
+      RATE_LIMIT_MAX_ANONYMOUS: ${RATE_LIMIT_MAX_ANONYMOUS:-20}
     volumes:
       - machbar_data:/app/data
     security_opt:

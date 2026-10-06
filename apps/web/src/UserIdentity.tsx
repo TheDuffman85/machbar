@@ -23,7 +23,7 @@ export function UserIdentity({
   pending,
   onSwitch,
 }: {
-  userId: string;
+  userId: string | null;
   disabled: boolean;
   pending: boolean;
   onSwitch: (id: string) => Promise<void>;
@@ -41,6 +41,7 @@ export function UserIdentity({
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (!userId) return;
     let cancelled = false;
     void QRCode.toDataURL(userId, { width: 256, margin: 4 }).then(
       (data) => {
@@ -163,6 +164,7 @@ export function UserIdentity({
   }
 
   async function copyId() {
+    if (!userId) return;
     try {
       await navigator.clipboard.writeText(userId);
       setNotice(t('idCopied'));
@@ -180,28 +182,30 @@ export function UserIdentity({
           <p>{t('userIdentitySubtitle')}</p>
         </div>
       </div>
-      <div className="settings-grid identity-grid">
-        <section className="panel settings-panel">
-          <h2>{t('yourUserId')}</h2>
-          <p>{t('userIdHelp')}</p>
-          {qr && (
-            <img className="identity-qr" src={qr} alt={t('userIdQr')} width={256} height={256} />
-          )}
-          <form onSubmit={(event) => event.preventDefault()}>
-            <label>
-              {t('currentUserId')}
-              <input ref={currentId} readOnly value={userId} spellCheck={false} />
-            </label>
-            <button type="button" className="button secondary" onClick={() => void copyId()}>
-              <Copy size={16} />
-              {t('copyUserId')}
-            </button>
-          </form>
-          <p className="identity-hint">{t('userIdPrivacy')}</p>
-        </section>
+      <div className={`settings-grid identity-grid ${userId ? '' : 'identity-selection'}`}>
+        {userId && (
+          <section className="panel settings-panel">
+            <h2>{t('yourUserId')}</h2>
+            <p>{t('userIdHelp')}</p>
+            {qr && (
+              <img className="identity-qr" src={qr} alt={t('userIdQr')} width={256} height={256} />
+            )}
+            <form onSubmit={(event) => event.preventDefault()}>
+              <label>
+                {t('currentUserId')}
+                <input ref={currentId} readOnly value={userId} spellCheck={false} />
+              </label>
+              <button type="button" className="button secondary" onClick={() => void copyId()}>
+                <Copy size={16} />
+                {t('copyUserId')}
+              </button>
+            </form>
+            <p className="identity-hint">{t('userIdPrivacy')}</p>
+          </section>
+        )}
         <section className="panel settings-panel">
           <h2>{t('switchUser')}</h2>
-          <p>{t('switchUserHelp')}</p>
+          <p>{t(userId ? 'switchUserHelp' : 'selectUserHelp')}</p>
           <form onSubmit={(event) => void switchUser(event)}>
             <label>
               {t('existingUserId')}

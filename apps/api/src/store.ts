@@ -27,7 +27,11 @@ export class JsonStore {
       if (this.locks.get(userId) === next) this.locks.delete(userId);
     }
   }
-  private async load(userId: string, requireExisting = false): Promise<UserDocument> {
+  private async load(
+    userId: string,
+    requireExisting = false,
+    allowCreate = true,
+  ): Promise<UserDocument> {
     try {
       const raw = await readFile(this.path(userId), 'utf8');
       const parsed = userDocumentSchema.safeParse(JSON.parse(raw));
@@ -37,6 +41,7 @@ export class JsonStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         if (requireExisting) throw new DomainError('USER_NOT_FOUND', 404);
+        if (!allowCreate) throw new DomainError('USER_CREATION_DISABLED', 403);
         return createUser(userId);
       }
       if (error instanceof SyntaxError) throw new DomainError('DATA_CORRUPT', 500);
@@ -67,8 +72,8 @@ export class JsonStore {
       await unlink(temp).catch(() => {});
     }
   }
-  async read(userId: string): Promise<UserDocument> {
-    return this.serial(userId, () => this.load(userId));
+  async read(userId: string, allowCreate = true): Promise<UserDocument> {
+    return this.serial(userId, () => this.load(userId, false, allowCreate));
   }
   async readExisting(userId: string): Promise<UserDocument> {
     return this.serial(userId, () => this.load(userId, true));
@@ -77,9 +82,10 @@ export class JsonStore {
     userId: string,
     action: (doc: UserDocument) => T | Promise<T>,
     expectedRevision?: number,
+    allowCreate = true,
   ): Promise<{ document: UserDocument; result: T }> {
     return this.serial(userId, async () => {
-      const doc = await this.load(userId);
+      const doc = await this.load(userId, false, allowCreate);
       if (expectedRevision !== undefined && doc.revision !== expectedRevision)
         throw new DomainError('DOCUMENT_CONFLICT', 409);
       const result = await action(doc);
