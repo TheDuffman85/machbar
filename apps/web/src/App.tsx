@@ -470,7 +470,11 @@ export function App() {
         syncRequestedRef.current = false;
         syncTimerRef.current = window.setTimeout(
           () => void syncRef.current(),
-          succeeded && !entryRef.current?.queue.length ? 60_000 : retryDelayRef.current,
+          succeeded && !entryRef.current?.queue.length
+            ? document.hidden
+              ? 60_000
+              : 5_000
+            : retryDelayRef.current,
         );
       }
     }
@@ -512,6 +516,7 @@ export function App() {
     window.addEventListener('online', reconnect);
     window.addEventListener('offline', reconnect);
     document.addEventListener('visibilitychange', foreground);
+    window.addEventListener('focus', foreground);
     window.addEventListener('storage', identityChanged);
     // Refresh calendar/progress at midnight in the profile's timezone.
     const clock = window.setInterval(() => {
@@ -524,6 +529,7 @@ export function App() {
       window.removeEventListener('online', reconnect);
       window.removeEventListener('offline', reconnect);
       document.removeEventListener('visibilitychange', foreground);
+      window.removeEventListener('focus', foreground);
       window.removeEventListener('storage', identityChanged);
       window.clearTimeout(syncTimerRef.current);
       window.clearInterval(clock);
@@ -896,14 +902,16 @@ function Heading({
   subtitle,
   children,
   eyebrow,
+  className = '',
 }: {
   title: string;
   subtitle: string;
   children?: ReactNode;
   eyebrow?: string;
+  className?: string;
 }) {
   return (
-    <div className="page-heading">
+    <div className={`page-heading ${className}`}>
       <div>
         {eyebrow && <div className="eyebrow">{eyebrow}</div>}
         <h1>{title}</h1>
@@ -2020,7 +2028,7 @@ function SyncLog() {
         <ChevronLeft size={16} />
         {t('settings')}
       </NavLink>
-      <Heading title={t('syncLog')} subtitle={t('syncLogHelp')}>
+      <Heading title={t('syncLog')} subtitle={t('syncLogHelp')} className="sync-log-page-heading">
         <button
           className="button secondary"
           disabled={!online || syncing}

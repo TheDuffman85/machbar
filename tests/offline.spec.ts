@@ -508,6 +508,63 @@ test('revision races fetch, merge and retry without losing the local operation',
   expect(result.document.revision).toBe(3);
 });
 
+test('online devices receive creations, completions and undo without refreshing or local edits', async ({
+  page,
+  browser,
+}) => {
+  await ready(page);
+  const baseline = await readSnapshot(page);
+  const otherContext = await browser.newContext({ locale: 'en-US' });
+  try {
+    await otherContext.addInitScript(
+      (id) => localStorage.setItem('machbar-user-id', id),
+      baseline.document.userId,
+    );
+    const other = await otherContext.newPage();
+    await ready(other, false);
+    await expect(other.getByRole('heading', { name: 'Hey, Offline friend' })).toBeVisible();
+    await expect
+      .poll(async () => (await localEntry(other)).base.revision)
+      .toBe(baseline.document.revision);
+    expect(await other.evaluate(() => document.hidden)).toBe(false);
+
+    await create(page, 'Add a habit', 'Live walk');
+    await readSnapshot(page);
+    await expect(
+      other.getByRole('button', { name: 'Complete Live walk', exact: true }),
+    ).toBeVisible();
+
+    await other.getByRole('button', { name: 'Complete Live walk', exact: true }).click();
+    await readSnapshot(other);
+    await expect(page.getByRole('button', { name: 'Undo Live walk', exact: true })).toBeVisible();
+    expect((await localEntry(page)).snapshot.progress.xp).toBe(10);
+
+    await page.getByRole('button', { name: 'Undo Live walk', exact: true }).click();
+    await readSnapshot(page);
+    await expect(
+      other.getByRole('button', { name: 'Complete Live walk', exact: true }),
+    ).toBeVisible();
+    expect((await localEntry(other)).snapshot.progress.xp).toBe(0);
+    expect((await localEntry(other)).queue).toEqual([]);
+  } finally {
+    await otherContext.close();
+  }
+});
+
+test('regaining window focus pulls remote changes before the next idle check', async ({ page }) => {
+  await ready(page);
+  const baseline = await readSnapshot(page);
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  const document = structuredClone(baseline.document);
+  document.preferences.name = 'Remote friend';
+  await writeSnapshot(page, document);
+  await expect(page.getByRole('heading', { name: 'Hey, Offline friend' })).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.getByRole('heading', { name: 'Hey, Remote friend' })).toBeVisible();
+  expect((await localEntry(page)).queue).toEqual([]);
+});
+
 test('offline devices merge additions, independent fields and shared completions on reconnect', async ({
   page,
   context,
