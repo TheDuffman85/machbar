@@ -27,6 +27,8 @@ Run **one application instance** against the data volume. JSON writes are serial
 
 There is no login. Each browser receives a unique UUID stored in local storage (`machbar-user-id`), with its profile saved in a separate `<userId>.json` file on the server. Open **Switch User** from the avatar menu to see and copy your ID or QR code. On another device, enter that existing ID, scan its QR code with the camera, or upload a QR image, then choose **Switch profile**. Camera scanning requires HTTPS or localhost; manual entry and QR image upload also work on LAN HTTP. Sync or discard pending changes before switching. Your previous profile stays saved.
 
+The ID is also backed up in a host-only cookie (`SameSite=Strict`, `Secure` on HTTPS). On iOS 17.2 and later, installing a Home Screen app copies cookies but not local storage, so the PWA restores the same ID from that cookie on first launch and loads its synced profile. Existing local storage takes precedence, and switching profiles updates both copies. Sync pending changes before installing. For a PWA installed before this backup was available, use **Switch User** inside the PWA to restore the ID shown in Safari.
+
 Keep your ID or QR code somewhere safe: clearing browser storage creates a new ID, and anyone who knows an ID can access and edit that profile. The ID is an access key, not a login.
 
 The data directory is never exposed by the web server.

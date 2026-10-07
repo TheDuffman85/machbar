@@ -1,6 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase, type IDBPTransaction } from 'idb';
 import { newId } from './uuid';
-import { getLocalUserId, localUserIdKey } from './identity';
+import { getLocalUserId, localUserIdKey, setLocalUserId } from './identity';
 import {
   applyCompletion,
   bootstrapFor,
@@ -450,7 +450,7 @@ export async function switchLocalUser(userId: string): Promise<Entry> {
     () => {
       // Commit the identity without an asynchronous gap after the transaction.
       checkIdentity(id);
-      localStorage.setItem(localUserIdKey, parsed.data);
+      setLocalUserId(parsed.data);
       channel?.postMessage(parsed.data);
     },
   );

@@ -1,0 +1,87 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getLocalUserId, localUserIdKey, setLocalUserId } from './identity';
+
+const alice = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const bob = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+let storage: Map<string, string>;
+let cookie: string;
+let writtenCookie: string;
+
+beforeEach(() => {
+  storage = new Map();
+  cookie = '';
+  writtenCookie = '';
+  vi.stubGlobal('localStorage', {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+  });
+  vi.stubGlobal('location', { protocol: 'https:' });
+  vi.stubGlobal('document', {
+    get cookie() {
+      return cookie;
+    },
+    set cookie(value: string) {
+      writtenCookie = value;
+      cookie = value.split(';')[0]!;
+    },
+  });
+});
+afterEach(() => vi.unstubAllGlobals());
+
+describe('profile identity persistence', () => {
+  it('backs up an existing local ID without replacing it with a stale cookie', () => {
+    storage.set(localUserIdKey, alice.toUpperCase());
+    cookie = `${localUserIdKey}=${bob}`;
+    expect(getLocalUserId()).toBe(alice);
+    expect(storage.get(localUserIdKey)).toBe(alice);
+    expect(writtenCookie).toBe(
+      `${localUserIdKey}=${alice}; Path=/; Max-Age=31536000; SameSite=Strict; Secure`,
+    );
+  });
+
+  it.each([undefined, 'local'])('restores a copied cookie when the local ID is %s', (local) => {
+    if (local) storage.set(localUserIdKey, local);
+    cookie = `other=value; ${localUserIdKey}=${bob.toUpperCase()}; another=value`;
+    expect(getLocalUserId()).toBe(bob);
+    expect(storage.get(localUserIdKey)).toBe(bob);
+  });
+
+  it.each(['', 'local', '%E0%A4%A'])('ignores an invalid cookie value %s', (value) => {
+    cookie = `${localUserIdKey}=${value}`;
+    const id = getLocalUserId();
+    expect(id).toMatch(/^[a-f0-9-]{36}$/);
+    expect(storage.get(localUserIdKey)).toBe(id);
+    expect(getLocalUserId()).toBe(id);
+  });
+
+  it('updates the cookie immediately when switching profiles', () => {
+    setLocalUserId(alice);
+    setLocalUserId(bob);
+    storage.clear();
+    expect(getLocalUserId()).toBe(bob);
+  });
+
+  it('supports LAN HTTP without a Secure cookie', () => {
+    vi.stubGlobal('location', { protocol: 'http:' });
+    setLocalUserId(alice);
+    expect(writtenCookie).toBe(
+      `${localUserIdKey}=${alice}; Path=/; Max-Age=31536000; SameSite=Strict`,
+    );
+  });
+
+  it('still uses local storage when cookies are blocked', () => {
+    vi.stubGlobal('document', {
+      get cookie(): string {
+        throw new Error('Cookies blocked');
+      },
+      set cookie(_value: string) {
+        throw new Error('Cookies blocked');
+      },
+    });
+    const id = getLocalUserId();
+    expect(storage.get(localUserIdKey)).toBe(id);
+    expect(getLocalUserId()).toBe(id);
+    setLocalUserId(bob);
+    expect(getLocalUserId()).toBe(bob);
+  });
+});

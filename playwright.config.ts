@@ -37,7 +37,7 @@ export default defineConfig({
     },
     {
       name: 'iphone',
-      testMatch: /mobile-safari\.spec\.ts/,
+      testMatch: /(?:mobile-safari|pwa-identity)\.spec\.ts/,
       use: { ...devices['iPhone 17 Pro Max'] },
     },
   ],
