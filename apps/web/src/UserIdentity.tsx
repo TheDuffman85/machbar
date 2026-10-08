@@ -263,7 +263,6 @@ export function UserIdentity({
               />
             </div>
             {scanning && <video className="identity-camera" ref={video} muted playsInline />}
-            <p className="muted identity-hint">{t('cameraHelp')}</p>
             {pending && <p className="muted">{t('switchPending')}</p>}
             <button className="button primary" disabled={disabled || reading || !value.trim()}>
               {t('switchUser')}
