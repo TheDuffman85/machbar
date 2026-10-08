@@ -184,10 +184,7 @@ export class ReminderScheduler {
             version: 1,
             bindingId: binding.id,
             title: 'Machbar',
-            body:
-              reminder.language === 'de'
-                ? `Zeit für deinen kleinen Erfolg: ${reminder.title}`
-                : `Time for a small win: ${reminder.title}`,
+            body: reminder.title,
             tag: key,
             expiresAt: reminder.expiresAt,
           };
