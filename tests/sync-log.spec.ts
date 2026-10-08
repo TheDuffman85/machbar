@@ -42,8 +42,9 @@ test.beforeEach(async ({ request, page }) => {
   await expect.poll(async () => (await storedLog(page)).some((op) => op.uploaded)).toBe(true);
 });
 
-test('fast saves stay silent and slow background sync appears only after 2.5 seconds', async ({
+test('background saves stay silent during slow syncs, failures, and offline use', async ({
   page,
+  context,
 }) => {
   await page.goto('/settings');
   await readSnapshot(page);
@@ -84,15 +85,28 @@ test('fast saves stay silent and slow background sync appears only after 2.5 sec
     await page.clock.fastForward(2_000);
     await expect(page.locator('.notifications .notice')).toHaveCount(0);
     await page.clock.fastForward(500);
-    await expect(
-      page.locator('.notifications').getByText('Syncing your changes…', { exact: true }),
-    ).toBeVisible();
+    await expect(page.locator('.notifications .notice')).toHaveCount(0);
     release();
     await readSnapshot(page);
     await expect(page.locator('.notifications .notice')).toHaveCount(0);
   } finally {
     release();
   }
+  await page.unroute('**/api/sync');
+  await page.route('**/api/sync', (route) =>
+    route.fulfill({ status: 503, json: { code: 'INTERNAL_ERROR' } }),
+  );
+  await page.getByRole('button', { name: 'Dark', exact: true }).click();
+  await expect.poll(async () => (await storedLog(page))[0]?.status).toBe('failed');
+  expect((await localEntry(page)).queue.length).toBeGreaterThan(0);
+  await expect(page.locator('.notifications .notice')).toHaveCount(0);
+  await context.setOffline(true);
+  await page.getByRole('button', { name: 'Light', exact: true }).click();
+  expect((await localEntry(page)).snapshot.document.preferences.theme).toBe('light');
+  await expect(page.locator('.notifications .notice')).toHaveCount(0);
+  expect(
+    await page.evaluate(() => (window as typeof window & { syncMessages: string[] }).syncMessages),
+  ).toEqual([]);
 });
 
 test('the sync log keeps 50 operations, records failures and recovery, and works offline', async ({

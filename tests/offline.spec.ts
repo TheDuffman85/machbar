@@ -59,6 +59,8 @@ test('all features save offline, survive reload and sync their full documents', 
   await page.getByRole('button', { name: 'Undo Offline walk', exact: true }).click();
   await page.getByRole('button', { name: 'Complete Offline walk', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Undo Offline walk', exact: true })).toBeVisible();
+  await expect(page.getByText('Pending sync', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.notifications .notice')).toHaveCount(0);
   await page.goto('/habits');
   await page.getByRole('button', { name: 'Edit Offline walk', exact: true }).click();
   await page
@@ -69,6 +71,10 @@ test('all features save offline, survive reload and sync their full documents', 
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.goto('/goals');
   await create(page, 'New goal', 'Offline home');
+  await page.getByRole('button', { name: 'Complete Offline home', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Undo Offline home', exact: true })).toBeVisible();
+  await expect(page.getByText('Pending sync', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Undo Offline home', exact: true }).click();
   await create(page, 'Add a step', 'Shelf');
   await create(page, 'Add a step', 'Plant');
   await page.getByRole('button', { name: 'Move up Plant', exact: true }).click();
@@ -78,6 +84,7 @@ test('all features save offline, survive reload and sync their full documents', 
   for (const title of ['Shelf', 'Plant']) {
     await page.getByRole('button', { name: `Complete ${title}`, exact: true }).click();
     await expect(page.getByRole('button', { name: `Undo ${title}`, exact: true })).toBeVisible();
+    await expect(page.getByText('Pending sync', { exact: true })).toHaveCount(0);
   }
   await page.getByRole('button', { name: 'Edit Offline home', exact: true }).click();
   await page
@@ -277,6 +284,8 @@ test('a stalled local transaction releases the sync indicator and can recover', 
   await context.setOffline(true);
   await create(page, 'Add a habit', 'Queued mobile walk');
   const saved = await localEntry(page);
+  await page.goto('/settings/sync-log');
+  await expect(page.getByRole('heading', { name: 'Sync log', exact: true })).toBeVisible();
   await other.evaluate(async (id) => {
     const database = await new Promise<IDBDatabase>((resolve) => {
       const request = indexedDB.open('machbar');
@@ -307,6 +316,7 @@ test('a stalled local transaction releases the sync indicator and can recover', 
     expect((await localEntry(page)).queue).toEqual(saved.queue);
     await page.getByRole('button', { name: 'Sync now', exact: true }).click();
     expect((await readSnapshot(page)).document.habits[0].title).toBe('Queued mobile walk');
+    await page.locator('nav:visible').getByRole('link', { name: 'Today', exact: true }).click();
     await page.reload();
     await expect(
       page.getByRole('button', { name: 'Complete Queued mobile walk', exact: true }),

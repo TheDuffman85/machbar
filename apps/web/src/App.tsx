@@ -41,7 +41,6 @@ import {
   Sun,
   Target,
   Trophy,
-  WifiOff,
   X,
   Pencil,
   Archive,
@@ -395,8 +394,6 @@ export function App() {
     userId: string;
     theme: Preferences['theme'];
   } | null>(null);
-  const [slowSync, setSlowSync] = useState(false);
-  const [syncFailed, setSyncFailed] = useState(false);
   const syncingRef = useRef(false);
   const syncTimerRef = useRef<number | undefined>(undefined);
   const syncRef = useRef<() => Promise<void>>(async () => {});
@@ -435,7 +432,6 @@ export function App() {
     setToast('');
     setError('');
     setThemePreview(null);
-    setSyncFailed(false);
   }, [snapshot?.document.userId]);
   const sync = async () => {
     if (!navigator.onLine) {
@@ -452,23 +448,15 @@ export function App() {
     syncRequestedRef.current = false;
     syncingRef.current = true;
     setSyncing(true);
-    setSlowSync(false);
-    const noticeTimer = window.setTimeout(() => setSlowSync(true), 2_500);
     let succeeded = false;
     try {
       const next = await syncEntry();
       succeeded = true;
       retryDelayRef.current = 5_000;
-      setSyncFailed(false);
       if (next.snapshot.document.userId === localStorage.getItem(localUserIdKey))
         queryClient.setQueryData(['machbar'], next);
     } catch (e) {
       retryDelayRef.current = Math.min(retryDelayRef.current * 2, 60_000);
-      if (
-        syncingUserId === localStorage.getItem(localUserIdKey) &&
-        !(e instanceof ApiError && e.code === 'ACCOUNT_CHANGED')
-      )
-        setSyncFailed(true);
       // Background network failures are recorded in the log. Local storage
       // failures still need attention because they also affect local saves.
       if (
@@ -478,10 +466,8 @@ export function App() {
       )
         setError(e.code);
     } finally {
-      clearTimeout(noticeTimer);
       syncingRef.current = false;
       setSyncing(false);
-      setSlowSync(false);
       // Coalesce new edits after a successful upload. A failure must yield to
       // the retry backoff instead of immediately restarting a stalled sync.
       const userChanged = syncingUserId !== localStorage.getItem(localUserIdKey);
@@ -716,57 +702,36 @@ export function App() {
           <main className="main-content">
             <div className="notifications">
               {notifications}
-              {(!online ||
-                slowSync ||
-                (syncFailed && !syncing && entry.queue.length > 0) ||
-                entry.conflict) && (
+              {entry.conflict && (
                 <div className="notice" role="status">
                   <div>
-                    {!online ? (
-                      <WifiOff size={18} />
-                    ) : (
-                      <RefreshCw size={18} className={syncing ? 'spin' : ''} />
-                    )}
-                    <span>
-                      {entry.conflict
-                        ? t('conflict')
-                        : !online
-                          ? t('offline')
-                          : t(syncing ? 'syncing' : 'queued', { count: entry.queue.length })}
-                    </span>
+                    <RefreshCw size={18} />
+                    <span>{t('conflict')}</span>
                   </div>
-                  {entry.conflict ? (
-                    <button
-                      disabled={busy || !online}
-                      onClick={() =>
-                        setModal({
-                          kind: 'confirm',
-                          title: t('discard'),
-                          message: t('discardConfirm'),
-                          confirmLabel: t('discard'),
-                          onConfirm: async () => {
-                            setBusy(true);
-                            setError('');
-                            try {
-                              queryClient.setQueryData(['machbar'], await discardQueue());
-                            } catch (e) {
-                              setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
-                            } finally {
-                              setBusy(false);
-                            }
-                          },
-                        })
-                      }
-                    >
-                      {t('discard')}
-                    </button>
-                  ) : (
-                    online && (
-                      <button onClick={() => void sync()} disabled={syncing}>
-                        {t('syncNow')}
-                      </button>
-                    )
-                  )}
+                  <button
+                    disabled={busy || !online}
+                    onClick={() =>
+                      setModal({
+                        kind: 'confirm',
+                        title: t('discard'),
+                        message: t('discardConfirm'),
+                        confirmLabel: t('discard'),
+                        onConfirm: async () => {
+                          setBusy(true);
+                          setError('');
+                          try {
+                            queryClient.setQueryData(['machbar'], await discardQueue());
+                          } catch (e) {
+                            setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
+                          } finally {
+                            setBusy(false);
+                          }
+                        },
+                      })
+                    }
+                  >
+                    {t('discard')}
+                  </button>
                 </div>
               )}
               {needRefresh && (
@@ -1000,17 +965,9 @@ function TaskRow({
   disabled?: boolean;
 }) {
   const { t } = useTranslation();
-  const { snapshot, entry, toggle } = useApp();
+  const { snapshot, toggle } = useApp();
   const completed =
     snapshot.document.completions[operationKey(snapshot.document, type, id, date)]?.completed;
-  const pending = entry.queue.some(
-    (op) =>
-      op.targetType &&
-      op.targetId &&
-      op.date &&
-      operationKey(snapshot.document, op.targetType, op.targetId, op.date) ===
-        operationKey(snapshot.document, type, id, date),
-  );
   return (
     <div className={`task-row ${completed ? 'checked' : ''}`}>
       <span className={`task-icon ${color}`}>
@@ -1018,10 +975,7 @@ function TaskRow({
       </span>
       <div className="task-copy">
         <strong>{title}</strong>
-        <span>
-          {subtitle}
-          {pending && <em>{t('pending')}</em>}
-        </span>
+        <span>{subtitle}</span>
       </div>
       {children}
       <span className="xp-tag">+10 XP</span>
@@ -1476,7 +1430,7 @@ function Today() {
 
 function Goals() {
   const { t } = useTranslation();
-  const { snapshot, entry, setModal, action, toggle, busy } = useApp();
+  const { snapshot, setModal, action, toggle, busy } = useApp();
   const [archived, setArchived] = useState(false);
   const doc = snapshot.document;
   const today = localDate(doc.preferences.timezone);
@@ -1529,9 +1483,6 @@ function Goals() {
             const hasSteps = goal.steps.some((step) => !step.archivedAt);
             const visibleSteps = goal.steps.filter((step) =>
               archived ? goal.archivedAt || step.archivedAt : !step.archivedAt,
-            );
-            const pending = entry.queue.some(
-              (op) => op.targetType === 'goal' && op.targetId === goal.id,
             );
             return (
               <section className="panel goal-card" key={goal.id}>
@@ -1679,9 +1630,6 @@ function Goals() {
                       >
                         {progress.done && <Check size={18} strokeWidth={3} />}
                       </button>
-                    )}
-                    {!hasSteps && pending && (
-                      <span className="goal-sync-status">{t('pending')}</span>
                     )}
                   </div>
                 )}

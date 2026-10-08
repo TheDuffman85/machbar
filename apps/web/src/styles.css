@@ -735,12 +735,6 @@ h3 {
   margin-top: 5px;
   line-height: 1.5;
 }
-.task-copy em {
-  font-style: normal;
-  display: block;
-  color: #80613d;
-  font-size: 9px;
-}
 .checked .task-copy strong {
   text-decoration: line-through;
   color: var(--muted);
@@ -1188,11 +1182,6 @@ h3 {
   margin-top: 6px;
   color: var(--green);
   font-size: 11px;
-}
-.goal-sync-status {
-  flex-basis: 100%;
-  color: var(--muted);
-  font-size: 10px;
 }
 .goal-completion {
   margin-left: auto;
@@ -2343,8 +2332,7 @@ legend {
 }
 
 .dark .habit-stats > span:first-child,
-.dark .streak-card strong,
-.dark .task-copy em {
+.dark .streak-card strong {
   color: #d4b38e;
 }
 
