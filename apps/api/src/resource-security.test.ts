@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { request as httpRequest, type ClientRequest } from 'node:http';
 import type { Socket } from 'node:net';
 import { join } from 'node:path';
 import { createUser, documentLimits, type UserDocument } from '@machbar/shared';
 import { buildServer } from './server.js';
 import { readConfig, type Config } from './config.js';
-import { JsonStore } from './store.js';
+import { SqliteStore } from './store.js';
 import { StorageBudget } from './storage-budget.js';
+import { storedRecord } from '../test-support/database.js';
 import { PushStore } from './notifications.js';
 
 let directory: string;
@@ -69,7 +70,7 @@ describe('document and request resource limits', () => {
     expect(response.statusCode).toBe(413);
     expect(response.json().code).toBe('DOCUMENT_LIMIT');
     expect(formatter).not.toHaveBeenCalled();
-    expect(await readdir(directory)).toEqual([]);
+    expect(await readdir(directory)).toEqual(['data.db']);
   });
   it('checks missing/unsafe revisions before parsing the request body', async () => {
     for (const value of [undefined, '9007199254740992']) {
@@ -104,7 +105,10 @@ describe('document and request resource limits', () => {
   });
   it('keeps existing oversized documents readable and permits reducing them', async () => {
     const legacy = schedules(8000);
+    await app.close();
+    await rm(join(directory, 'data.db'));
     await writeFile(join(directory, `${legacy.userId}.json`), JSON.stringify(legacy));
+    app = await buildServer({ config });
     const loaded = await app.inject({
       url: '/api/bootstrap',
       headers: { 'x-machbar-user': legacy.userId },
@@ -183,6 +187,65 @@ describe('document and request resource limits', () => {
       if (serveWeb) expect((await app.inject('/')).statusCode).toBe(200);
     }
   });
+  it('waits for disconnected backend work before closing SQLite on shutdown', async () => {
+    await app.close();
+    const store = new SqliteStore(directory);
+    app = await buildServer({ config, store });
+    const id = randomUUID();
+    let release!: () => void;
+    let started!: () => void;
+    let closingStarted!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const closingHook = new Promise<void>((resolve) => {
+      closingStarted = resolve;
+    });
+    app.get('/api/shutdown-test', async () => {
+      started();
+      await gate;
+      await store.update(id, (doc) => {
+        doc.preferences.name = 'Finished during shutdown';
+      });
+      return { ok: true };
+    });
+    app.addHook('onClose', async () => {
+      closingStarted();
+    });
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const client = httpRequest(`${address}/api/shutdown-test`, {
+      headers: { 'x-machbar-user': id },
+    });
+    client.on('error', () => {});
+    const disconnected = new Promise<void>((resolve) => client.once('close', resolve));
+    let closing: Promise<void> | undefined;
+    try {
+      client.end();
+      await entered;
+      client.destroy();
+      await disconnected;
+      let closed = false;
+      closing = app.close().then(() => {
+        closed = true;
+      });
+      await closingHook;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+      release();
+      await closing;
+      expect(JSON.parse(storedRecord(directory, 'profile', id)!).preferences.name).toBe(
+        'Finished during shutdown',
+      );
+    } finally {
+      release();
+      client.destroy();
+      await closing;
+    }
+  });
+
   it.each([
     { phase: 'handler', termination: 'disconnect', succeeds: true },
     { phase: 'handler', termination: 'disconnect', succeeds: false },
@@ -194,7 +257,7 @@ describe('document and request resource limits', () => {
     'retains slots through $termination until $phase work settles (success=$succeeds)',
     async ({ phase, termination, succeeds }) => {
       await app.close();
-      const store = new JsonStore(directory);
+      const store = new SqliteStore(directory);
       const readExisting = store.readExisting.bind(store);
       let releaseIo!: () => void;
       const io = new Promise<void>((resolve) => {
@@ -420,19 +483,19 @@ describe('persistent storage and creation limits', () => {
     const responses = await Promise.all([sync(first), sync(second)]);
     expect(responses.map((r) => r.statusCode).sort()).toEqual([200, 507]);
     const saved: UserDocument = responses.find((r) => r.statusCode === 200)!.json().document;
-    const original = await readFile(join(directory, `${saved.userId}.json`), 'utf8');
+    const original = storedRecord(directory, 'profile', saved.userId);
     saved.operations[randomUUID()] = { fingerprint: 'x'.repeat(500), version: 1 };
     expect((await sync(saved)).json().code).toBe('STORAGE_LIMIT');
-    expect(await readFile(join(directory, `${saved.userId}.json`), 'utf8')).toBe(original);
+    expect(storedRecord(directory, 'profile', saved.userId)).toBe(original);
     await restart({ maxStorageBytes: 600 });
     expect((await sync()).statusCode).toBe(507);
     delete saved.operations[Object.keys(saved.operations)[0]!];
     expect((await sync(saved)).statusCode).toBe(200);
   });
-  it('reserves free space and leaves no files after rejection', async () => {
+  it('reserves free space without persisting rejected profiles', async () => {
     await restart({ storageReserveBytes: Number.MAX_SAFE_INTEGER });
     expect((await sync()).json().code).toBe('STORAGE_LIMIT');
-    expect(await readdir(directory)).toEqual([]);
+    expect(await readdir(directory)).toEqual(['data.db']);
   });
   it('shares the aggregate quota between push state and profile commits', async () => {
     const id = randomUUID();
@@ -443,7 +506,7 @@ describe('persistent storage and creation limits', () => {
       ...config,
       maxStorageBytes: Buffer.byteLength(JSON.stringify(expected)),
     });
-    const profiles = new JsonStore(directory, budget),
+    const profiles = new SqliteStore(directory, budget),
       push = new PushStore(directory, budget);
     await push.access(() => undefined, true);
     await expect(
@@ -451,6 +514,8 @@ describe('persistent storage and creation limits', () => {
         doc.preferences.name = 'x'.repeat(60);
       }),
     ).rejects.toMatchObject({ code: 'STORAGE_LIMIT' });
-    expect(await readdir(directory)).toEqual(['push-state.json']);
+    expect(storedRecord(directory, 'profile', id)).toBeUndefined();
+    expect(storedRecord(directory, 'push')).toBeDefined();
+    await budget.close();
   });
 });

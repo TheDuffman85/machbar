@@ -1,12 +1,14 @@
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { buildServer } from '../apps/api/dist/server.js';
-import { JsonStore } from '../apps/api/dist/store.js';
+import { DatabaseSync } from 'node:sqlite';
+import { databaseFilename } from '../apps/api/dist/database.js';
+import { SqliteStore } from '../apps/api/dist/store.js';
 import { readConfig } from '../apps/api/dist/config.js';
 import { userDocumentSchema } from '../packages/shared/dist/index.js';
 const directory = await mkdtemp(join(tmpdir(), 'machbar-browser-'));
-const store = new JsonStore(directory);
+const store = new SqliteStore(directory);
 const config = {
   ...readConfig({
     APP_URL: 'http://localhost:3100',
@@ -27,8 +29,14 @@ app.post('/api/test/config', async (request) => {
 });
 app.post('/api/test/reset', async () => {
   config.disableUserCreation = false;
-  await rm(directory, { recursive: true, force: true });
-  await mkdir(directory, { recursive: true });
+  const database = new DatabaseSync(join(directory, databaseFilename));
+  try {
+    database.exec(`PRAGMA foreign_keys = ON; BEGIN;
+      DELETE FROM completions; DELETE FROM gifts; DELETE FROM profiles;
+      DELETE FROM push_bindings; DELETE FROM push_dispatches; DELETE FROM push_state; COMMIT;`);
+  } finally {
+    database.close();
+  }
   return { ok: true };
 });
 app.post('/api/test/seed', async (request) => {

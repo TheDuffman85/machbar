@@ -182,6 +182,7 @@ test('cached startup and local saves remain responsive when navigator is online 
   expect((await localEntry(page)).snapshot.document.habits[0].title).toBe('API unavailable');
   expect((await localEntry(page)).queue.length).toBeGreaterThan(0);
   await page.unroute('**/api/**');
+  await page.goto('/settings/sync-log');
   await page.getByRole('button', { name: 'Sync now', exact: true }).click();
   expect((await readSnapshot(page)).document.habits[0].title).toBe('API unavailable');
 });
@@ -267,6 +268,7 @@ test('a blocked database upgrade offers Retry and preserves pending habits', asy
     ).toBeVisible();
     expect((await localEntry(page)).queue).toEqual(saved.queue);
     await page.unroute('**/api/**');
+    await page.goto('/settings/sync-log');
     await page.getByRole('button', { name: 'Sync now', exact: true }).click();
     expect((await readSnapshot(page)).document.habits[0].title).toBe('Saved mobile walk');
   } finally {

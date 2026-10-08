@@ -1,6 +1,7 @@
-import { lstat, mkdir, readdir, statfs } from 'node:fs/promises';
-import { basename, join } from 'node:path';
-import { DomainError, localUserIdSchema } from '@machbar/shared';
+import { statfs } from 'node:fs/promises';
+import { DomainError } from '@machbar/shared';
+import { SqliteDatabase, type RecordKind } from './database.js';
+import { readRecord, recordBytes, writeRecord } from './database-records.js';
 
 export const storageDefaults = {
   maxProfiles: 100,
@@ -9,50 +10,69 @@ export const storageDefaults = {
 };
 export type StorageLimits = typeof storageDefaults;
 
-// Profiles and push state share a budget and a commit queue. Recount from disk
-// so quotas survive restarts and rejected/failed writes never consume capacity.
-// One application instance must own the directory, as with profile revisions.
+// Account for logical UTF-8 payload bytes, excluding SQLite overhead and legacy
+// recovery snapshots. Quota checks and writes share one database transaction.
 export class StorageBudget {
+  readonly database: SqliteDatabase;
   private queue: Promise<unknown> = Promise.resolve();
   constructor(
     private directory: string,
     private limits: StorageLimits = storageDefaults,
-  ) {}
-  async commit<T>(target: string, bytes: number, write: () => Promise<T>): Promise<T> {
+  ) {
+    this.database = new SqliteDatabase(directory);
+  }
+  async commit(
+    kind: RecordKind,
+    key: string,
+    contents: string,
+    validate?: (previous: string | undefined) => void,
+  ): Promise<void> {
     const next = this.queue
       .catch(() => {})
       .then(async () => {
-        await mkdir(this.directory, { recursive: true, mode: 0o700 });
-        let used = 0,
-          profiles = 0,
-          previous = 0,
-          exists = false;
-        for (const entry of await readdir(this.directory, { withFileTypes: true })) {
-          const file = await lstat(join(this.directory, entry.name));
-          if (!file.isFile()) continue;
-          used += file.size;
-          if (
-            entry.name.endsWith('.json') &&
-            localUserIdSchema.safeParse(entry.name.slice(0, -5)).success
-          )
-            profiles++;
-          if (entry.name === basename(target)) {
-            exists = true;
-            previous = file.size;
-          }
-        }
-        const isProfile = localUserIdSchema.safeParse(basename(target).slice(0, -5)).success;
-        if (isProfile && !exists && profiles >= this.limits.maxProfiles)
-          throw new DomainError('PROFILE_LIMIT', 507);
-        if (used - previous + bytes > this.limits.maxStorageBytes && bytes > previous)
-          throw new DomainError('STORAGE_LIMIT', 507);
+        const db = await this.database.ready();
+        const bytes = Buffer.byteLength(contents);
         const disk = await statfs(this.directory, { bigint: true });
-        // Atomic replacement requires room for the complete temporary file.
-        if (disk.bavail * disk.bsize < BigInt(this.limits.storageReserveBytes) + BigInt(bytes))
-          throw new DomainError('STORAGE_LIMIT', 507);
-        return write();
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          const previous = readRecord(db, kind, key);
+          validate?.(previous);
+          const size = recordBytes(db, kind, key);
+          // A shrinking document still journals the larger previous payload.
+          // Reserve room for both journal pages and the replacement payload.
+          if (
+            disk.bavail * disk.bsize <
+            BigInt(this.limits.storageReserveBytes) +
+              BigInt(bytes + Math.max(bytes, size) + 64 * 1024)
+          )
+            throw new DomainError('STORAGE_LIMIT', 507);
+          const used = Number(
+            db
+              .prepare(
+                `SELECT (SELECT COALESCE(SUM(logical_bytes), 0) FROM profiles) +
+                  (SELECT COALESCE(SUM(logical_bytes), 0) FROM push_state) AS bytes`,
+              )
+              .get()!.bytes,
+          );
+          const profiles = Number(
+            db.prepare('SELECT COUNT(*) AS count FROM profiles').get()!.count,
+          );
+          if (kind === 'profile' && previous === undefined && profiles >= this.limits.maxProfiles)
+            throw new DomainError('PROFILE_LIMIT', 507);
+          if (used - size + bytes > this.limits.maxStorageBytes && bytes > size)
+            throw new DomainError('STORAGE_LIMIT', 507);
+          writeRecord(db, kind, key, contents);
+          db.exec('COMMIT');
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
       });
     this.queue = next;
     return next;
+  }
+  async close() {
+    await this.queue.catch(() => {});
+    await this.database.close();
   }
 }

@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import webpush from 'web-push';
 import { createUser, mutateDocument, operationKey } from '@machbar/shared';
 import { readConfig } from './config.js';
 import { buildServer } from './server.js';
-import { JsonStore } from './store.js';
+import { SqliteStore } from './store.js';
 import { PushStore, ReminderScheduler } from './notifications.js';
+import { storedRecord, executeDatabase } from '../test-support/database.js';
 import { StorageBudget } from './storage-budget.js';
 import {
   isPublicAddress,
@@ -22,7 +23,7 @@ const vapid = webpush.generateVAPIDKeys();
 const keys = { p256dh: webpush.generateVAPIDKeys().publicKey, auth: 'AAAAAAAAAAAAAAAAAAAAAA' };
 const userId = randomUUID(),
   otherId = randomUUID();
-let directory: string, profiles: JsonStore, push: PushStore;
+let directory: string, profiles: SqliteStore, push: PushStore;
 let now: Date;
 let app: Awaited<ReturnType<typeof buildServer>>;
 const send = vi.fn<PushSender>(async () => {});
@@ -37,7 +38,7 @@ beforeEach(async () => {
   send.mockReset();
   validate.mockReset();
   directory = await mkdtemp(join(tmpdir(), 'machbar-push-'));
-  profiles = new JsonStore(directory);
+  profiles = new SqliteStore(directory);
   push = new PushStore(directory);
   const doc = createUser(userId);
   doc.preferences.timezone = 'Europe/Berlin';
@@ -68,6 +69,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   await app.close();
+  await push.close();
   await rm(directory, { recursive: true, force: true });
 });
 async function register(suffix = 'one', id = userId) {
@@ -122,10 +124,10 @@ describe('notification API', () => {
         headers: headers(),
         payload: { bindingId: id },
       });
-    const initial = await readFile(join(directory, 'push-state.json'), 'utf8');
+    const initial = storedRecord(directory, 'push');
     expect((await remove(randomUUID())).statusCode).toBe(200);
     expect(commit).not.toHaveBeenCalled();
-    expect(await readFile(join(directory, 'push-state.json'), 'utf8')).toBe(initial);
+    expect(storedRecord(directory, 'push')).toBe(initial);
     expect((await remove(bindingId)).statusCode).toBe(200);
     expect(commit).toHaveBeenCalledTimes(1);
     expect(await push.access((state) => state)).toEqual({ bindings: [], dispatches: {} });
@@ -193,7 +195,7 @@ describe('notification API', () => {
         ).statusCode,
       ).toBe(200);
     expect(await push.access((state) => state.bindings)).toEqual([]);
-    expect((await stat(join(directory, 'push-state.json'))).mode & 0o777).toBe(0o600);
+    expect((await stat(join(directory, 'data.db'))).mode & 0o777).toBe(0o600);
     expect((await profiles.readExisting(userId)).revision).toBe(1);
   });
   it('rejects invalid keys/endpoints and private-network DNS destinations', async () => {
@@ -476,7 +478,7 @@ describe('notification scheduler', () => {
   it('does not retry ambiguous network failures and preserves durable claims before sending', async () => {
     await register();
     send.mockImplementationOnce(async () => {
-      const state = JSON.parse(await readFile(join(directory, 'push-state.json'), 'utf8'));
+      const state = JSON.parse(storedRecord(directory, 'push')!);
       expect(Object.keys(state.dispatches)).toHaveLength(1);
       throw new Error('Socket timeout with secret endpoint');
     });
@@ -495,9 +497,10 @@ describe('notification scheduler', () => {
     await bad.access((state) => {
       state.bindings.push({ id: randomUUID(), userId, subscription: subscription() });
     }, true);
-    const { writeFile } = await import('node:fs/promises');
-    await writeFile(join(directory, 'push-state.json'), '{broken');
+    executeDatabase(directory, "UPDATE push_bindings SET endpoint = 'http://localhost/private'");
+    const corrupt = storedRecord(directory, 'push');
     await expect(bad.access(() => {})).rejects.toMatchObject({ code: 'PUSH_DATA_CORRUPT' });
-    expect(await readFile(join(directory, 'push-state.json'), 'utf8')).toBe('{broken');
+    expect(storedRecord(directory, 'push')).toBe(corrupt);
+    await bad.close();
   });
 });

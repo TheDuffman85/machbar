@@ -1,11 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { DomainError, documentWithinLimits, dueReminders } from '@machbar/shared';
 import type { Config } from './config.js';
-import { JsonStore } from './store.js';
+import { SqliteStore } from './store.js';
 import { StorageBudget } from './storage-budget.js';
 import {
   createPushSender,
@@ -16,36 +14,25 @@ import {
   type PushSender,
 } from './push-transport.js';
 
-const bindingSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
-  subscription: subscriptionSchema,
-  lastTestAt: z.number().optional(),
-});
-const stateSchema = z.object({
-  bindings: z.array(bindingSchema).max(10_000),
-  dispatches: z.record(
-    z.string(),
-    z.object({ expiresAt: z.number(), attempts: z.number(), retryAt: z.number().nullable() }),
-  ),
-});
-type State = z.infer<typeof stateSchema>;
-type Binding = z.infer<typeof bindingSchema>;
+import { stateSchema, type State, type Binding } from './push-state.js';
 
 export class PushStore {
   private queue: Promise<unknown> = Promise.resolve();
   constructor(
-    private directory: string,
+    directory: string,
     private budget = new StorageBudget(directory),
   ) {}
+  async close() {
+    await this.queue.catch(() => {});
+    await this.budget.close();
+  }
   private async load(): Promise<State> {
     try {
-      return stateSchema.parse(
-        JSON.parse(await readFile(join(this.directory, 'push-state.json'), 'utf8')),
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-        return { bindings: [], dispatches: {} };
+      const raw = await this.budget.database.read('push', '');
+      return raw === undefined
+        ? { bindings: [], dispatches: {} }
+        : stateSchema.parse(JSON.parse(raw));
+    } catch {
       throw new DomainError('PUSH_DATA_CORRUPT', 500);
     }
   }
@@ -59,32 +46,10 @@ export class PushStore {
         const state = await this.load();
         const result = action(state);
         if (typeof write === 'function' ? write(result) : write) {
-          await mkdir(this.directory, { recursive: true, mode: 0o700 });
-          const target = join(this.directory, 'push-state.json');
-          const temp = `${target}.${randomUUID()}.tmp`;
-          const contents = JSON.stringify(state);
+          const contents = JSON.stringify(stateSchema.parse(state));
           if (Buffer.byteLength(contents) > 32 * 1024 * 1024)
             throw new DomainError('STORAGE_LIMIT', 507);
-          await this.budget.commit(target, Buffer.byteLength(contents), async () => {
-            try {
-              const file = await open(temp, 'wx', 0o600);
-              try {
-                await file.writeFile(contents);
-                await file.sync();
-              } finally {
-                await file.close();
-              }
-              await rename(temp, target);
-              const directory = await open(this.directory, 'r');
-              try {
-                await directory.sync();
-              } finally {
-                await directory.close();
-              }
-            } finally {
-              await unlink(temp).catch(() => {});
-            }
-          });
+          await this.budget.commit('push', '', contents);
         }
         return result;
       });
@@ -100,7 +65,7 @@ export class ReminderScheduler {
   private reminderOffsets = new Map<string, number>();
   constructor(
     private push: PushStore,
-    private profiles: JsonStore,
+    private profiles: SqliteStore,
     private send: PushSender,
     private clock: () => Date = () => new Date(),
     private report: () => void = () => {},
@@ -252,7 +217,7 @@ export type NotificationOptions = {
 export function registerNotifications(
   app: FastifyInstance,
   config: Config,
-  profiles: JsonStore,
+  profiles: SqliteStore,
   options: NotificationOptions = {},
   budget = new StorageBudget(config.dataDir, config),
 ) {

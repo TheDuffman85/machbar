@@ -9,7 +9,7 @@ import {
   syncDocumentSchema,
 } from '@machbar/shared';
 import { type Config, readConfig } from './config.js';
-import { JsonStore, maxDocumentBytes } from './store.js';
+import { SqliteStore, maxDocumentBytes } from './store.js';
 import { StorageBudget } from './storage-budget.js';
 import { registerIdentity } from './identity.js';
 import { registerRateLimits } from './rate-limit.js';
@@ -27,15 +27,17 @@ declare module 'fastify' {
 export async function buildServer(
   options: {
     config?: Config;
-    store?: JsonStore;
+    store?: SqliteStore;
     logger?: boolean;
     notifications?: NotificationOptions;
   } = {},
 ) {
   const config = options.config ?? readConfig();
   const budget = new StorageBudget(config.dataDir, config);
-  const store = options.store ?? new JsonStore(config.dataDir, budget);
-  store.useBudget(budget);
+  const store = options.store ?? new SqliteStore(config.dataDir, budget);
+  await store.useBudget(budget);
+  await store.ready();
+  const activeWork = new Set<Promise<unknown>>();
   const app = Fastify({
     logger: options.logger
       ? {
@@ -53,6 +55,12 @@ export async function buildServer(
     connectionTimeout: 15_000,
     keepAliveTimeout: 5_000,
     trustProxy: config.trustedProxies.length ? config.trustedProxies : false,
+  });
+  app.addHook('onClose', async () => {
+    // A disconnected client can leave backend work running after its socket
+    // closes. Finish that work before closing the SQLite connection.
+    await Promise.allSettled(activeWork);
+    await store.close();
   });
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof z.ZodError) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
@@ -104,9 +112,12 @@ export async function buildServer(
   };
   const runApiWork = async <T>(request: FastifyRequest, work: () => T | Promise<T>) => {
     request.pendingApiWork++;
+    const pending = Promise.resolve().then(work);
+    activeWork.add(pending);
     try {
-      return await work();
+      return await pending;
     } finally {
+      activeWork.delete(pending);
       request.pendingApiWork--;
       if (request.apiResponseFinished) release(request);
     }
@@ -138,7 +149,7 @@ export async function buildServer(
     };
   });
   registerNotifications(app, config, store, options.notifications, budget);
-  const bootstrap = (document: Awaited<ReturnType<JsonStore['read']>>) => ({
+  const bootstrap = (document: Awaited<ReturnType<SqliteStore['read']>>) => ({
     document,
     dailyHistoryDays: config.dailyHistoryDays,
   });

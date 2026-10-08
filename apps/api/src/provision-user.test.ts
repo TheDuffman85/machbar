@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createUser } from '@machbar/shared';
 import { readConfig, type Config } from './config.js';
 import { buildServer } from './server.js';
+import { storedRecord } from '../test-support/database.js';
 import { provisionUser } from './provision-user.js';
 
 let directory: string;
@@ -26,13 +27,13 @@ describe('administrator profile provisioning', () => {
     const first = await provisionUser(config, ' Alice ');
     const second = await provisionUser(config);
     expect(first).not.toBe(second);
-    const profile = JSON.parse(await readFile(join(directory, `${first}.json`), 'utf8'));
+    const profile = JSON.parse(storedRecord(directory, 'profile', first)!);
     expect(profile).toEqual({
       ...createUser(first),
       revision: 1,
       preferences: { ...createUser(first).preferences, name: 'Alice' },
     });
-    expect((await stat(join(directory, `${first}.json`))).mode & 0o777).toBe(0o600);
+    expect((await stat(join(directory, 'data.db'))).mode & 0o777).toBe(0o600);
     expect(config.disableUserCreation).toBe(true);
   });
   it('rejects invalid names and enforces persistent provisioning quotas', async () => {
@@ -86,7 +87,7 @@ describe('administrator profile provisioning', () => {
           payload: document,
         });
         expect(saved.statusCode).toBe(200);
-        expect(await readdir(directory)).toEqual([`${userId}.json`]);
+        expect(await readdir(directory)).toEqual(['data.db']);
       } finally {
         await app.close();
       }

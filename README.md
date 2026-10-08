@@ -26,7 +26,7 @@ Machbar is a self-hosted, mobile-first app for building habits, breaking goals i
 - **Offline use and device sync:** edit, check off, and save locally; changes sync automatically when you reconnect.
 - **Optional habit reminders:** Web Push notifications with a reminder time for each habit.
 - **Make it yours:** custom avatars, challenge icons and colors, light/dark themes, English/German, and timezone-aware schedules.
-- **Self-hosted storage:** profiles and progress live in JSON files on your server, with Docker and Compose support.
+- **Self-hosted storage:** profiles and progress live in SQLite on your server, with Docker and Compose support.
 
 ## Screenshots
 
@@ -119,7 +119,7 @@ PWA installation, offline support, camera QR scanning, and push notifications re
 
 ### Profiles and access
 
-Machbar uses **private profile IDs instead of a login**. Each profile is saved in its own JSON file. Anyone with a profile's UUID or QR code can access and edit it, so keep these private and save your ID before clearing browser storage.
+Machbar uses **private profile IDs instead of a login**. Profiles are saved in the server’s SQLite database. Anyone with a profile's UUID or QR code can access and edit it, so keep these private and save your ID before clearing browser storage.
 
 Open **Switch User** in the avatar menu to copy your ID or QR code. Enter or scan it on another device to use the same profile. Sync or discard pending changes before switching. An installed PWA may have separate browser storage; enter the same ID there to restore your profile.
 
@@ -147,7 +147,7 @@ The command prints the new profile's private UUID; share it only with that user.
 | Variable                    | Default               | Purpose                                                   |
 | --------------------------- | --------------------- | --------------------------------------------------------- |
 | `MAX_PROFILES`              | `100`                 | Maximum saved profiles.                                   |
-| `MAX_STORAGE_BYTES`         | `268435456` (256 MiB) | Shared data-directory budget, including push state.       |
+| `MAX_STORAGE_BYTES`         | `268435456` (256 MiB) | Shared profile and push payload budget in SQLite.         |
 | `STORAGE_RESERVE_BYTES`     | `67108864` (64 MiB)   | Free disk space to reserve, plus space for atomic writes. |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60`                  | Fixed rate-limit window; allowed range: 1–86400 seconds.  |
 | `RATE_LIMIT_MAX_PER_IP`     | `300`                 | API requests per IP per window.                           |
@@ -200,7 +200,7 @@ volumes:
 
 With standalone Docker, replace `-v machbar_data:/app/data` with `-v /srv/data/machbar:/app/data`.
 
-On startup, the entrypoint prepares the mounted directory, sets owner-only permissions (`0700` for the directory, `0600` for regular JSON files), and then runs the app as UID/GID **1000:1000**. Existing JSON contents are preserved. For direct non-root startup, custom data paths, or rootless Docker, see [container startup and storage](docs/deployment.md#container-startup-and-storage).
+On startup, the entrypoint prepares the mounted directory, sets owner-only permissions (`0700` for the directory, `0600` for SQLite files and legacy JSON snapshots), and then runs the app as UID/GID **1000:1000**. Existing JSON data is migrated automatically; the original files are moved into `migration-backup` after import. For direct non-root startup, custom data paths, or rootless Docker, see [container startup and storage](docs/deployment.md#container-startup-and-storage).
 
 ### Updates and stopping
 
@@ -219,6 +219,10 @@ docker rm machbar
 # Repeat the docker run command from installation.
 ```
 
+Existing SQLite databases upgrade automatically to normalized relational tables on startup, preserving profiles, revisions, history, and notification receipts. Back up the stopped server before upgrading; the new database requires the updated release.
+
+On the first SQLite startup, Machbar imports existing profile JSON files and `push-state.json` from the same data volume in one transaction. Profile IDs, revisions, and notification receipts are preserved. After the import commits, original files move into `DATA_DIR/migration-backup`, created automatically when needed. Their contents remain unchanged and they are never reimported after a successful migration. Make a stopped-server backup before upgrading and keep enough free disk space for both formats. If a legacy file is corrupt, startup stops with its filename; repair it and restart. See [SQLite upgrades and rollback](docs/deployment.md#sqlite-upgrades-and-rollback).
+
 Sync pending changes, install any offered app update, and reopen old tabs to activate the new client. Keep browser storage intact during upgrades.
 
 Stop with `docker compose down` or `docker stop machbar`. Data remains in the named volume. **`docker compose down -v` deletes the Compose data volume.**
@@ -236,7 +240,7 @@ docker compose start machbar
 
 For standalone Docker, replace these Compose commands with `docker stop machbar`, `docker cp machbar:/app/data ./backups/machbar-data`, and `docker start machbar`.
 
-Keep backups private and save `.env` separately, including VAPID keys if enabled. Back up all JSON files, including `push-state.json`. Browser storage is a cache; unsynced changes are only on that device. Follow the [restore instructions](docs/deployment.md#backup-and-restore) to copy files back into a stopped deployment.
+Keep backups private and save `.env` separately, including VAPID keys if enabled. Back up the entire data directory, including `data.db`. JSON files in `migration-backup` are snapshots from before migration and do not contain later changes. Browser storage is a cache; unsynced changes are only on that device. Follow the [restore instructions](docs/deployment.md#backup-and-restore) to copy files back into a stopped deployment.
 
 ## Documentation
 

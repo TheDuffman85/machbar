@@ -6,9 +6,10 @@ import { join } from 'node:path';
 import { createUser } from '@machbar/shared';
 import { readConfig } from './config.js';
 import { buildServer } from './server.js';
-import { JsonStore } from './store.js';
+import { SqliteStore } from './store.js';
 
 const origin = 'http://localhost:3000';
+const extraStores: SqliteStore[] = [];
 let directory: string;
 let app: Awaited<ReturnType<typeof buildServer>>;
 beforeEach(async () => {
@@ -30,6 +31,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   await app.close();
+  for (const store of extraStores.splice(0)) await store.close();
   await rm(directory, { recursive: true, force: true });
 });
 
@@ -47,7 +49,8 @@ describe('profile access keys', () => {
     'requires a header credential for %s, even with an ID in the URL or body',
     async (url) => {
       const id = randomUUID();
-      const store = new JsonStore(directory);
+      const store = new SqliteStore(directory);
+      extraStores.push(store);
       await store.update(id, (doc) => {
         doc.preferences.name = 'Private';
       });
@@ -68,7 +71,8 @@ describe('profile access keys', () => {
   it('cannot read or overwrite another profile through a mismatched body credential', async () => {
     const alice = randomUUID();
     const bob = randomUUID();
-    const store = new JsonStore(directory);
+    const store = new SqliteStore(directory);
+    extraStores.push(store);
     await store.update(bob, (doc) => {
       doc.preferences.name = 'Private';
     });
@@ -82,7 +86,7 @@ describe('profile access keys', () => {
       expect(response.json()).toEqual({ code: 'ACCOUNT_CHANGED' });
     }
     expect((await store.readExisting(bob)).preferences.name).toBe('Private');
-    expect(await readdir(directory)).toEqual([`${bob}.json`]);
+    expect(await readdir(directory)).toEqual(['data.db']);
     const authorized = await app.inject({
       method: 'POST',
       url: '/api/local-user',
@@ -217,7 +221,7 @@ describe('API rate limits', () => {
     expect(limited.json()).toEqual({ code: 'RATE_LIMITED' });
     expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0);
     expect(limited.headers['cache-control']).toBe('no-store');
-    expect(await readdir(directory)).toEqual([]);
+    expect(await readdir(directory)).toEqual(['data.db']);
     expect(
       (await app.inject({ url: '/api/bootstrap', headers: { 'x-machbar-user': randomUUID() } }))
         .statusCode,

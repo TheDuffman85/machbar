@@ -28,8 +28,12 @@ Settings shows the installed frontend version and build date. Every Vite build (
 ## Workspace
 
 - `apps/web`: React, Vite, Tailwind, React Router, TanStack Query, i18next, IndexedDB, and a custom Workbox service worker.
-- `apps/api`: Fastify, browser UUID profiles, HTTP validation, and atomic JSON persistence.
+- `apps/api`: Fastify, browser UUID profiles, HTTP validation, and transactional SQLite persistence using Node’s built-in `node:sqlite`.
 - `packages/shared`: Zod schemas, calendar rules, completion operations, and pure progression calculations.
+
+Server data lives in `DATA_DIR/data.db`. SQLite schema version 2 uses relational tables for profiles, avatar options, habits, schedule history and weekdays, goals and steps, gifts, completions, operation receipts, push subscriptions, and dispatch receipts. Profile relationships use composite foreign keys containing the user ID; ordered collections retain explicit positions. API documents remain schema version 1 and are reconstructed within a read transaction. Writes replace the profile or push state atomically, with cached logical payload byte counts updated in the same transaction for quota accounting. No complete JSON document is stored in SQLite.
+
+Startup automatically upgrades the previous SQLite `records` table or imports legacy JSON files, committing the normalized schema and data together. JSON originals move into `DATA_DIR/migration-backup`, which is created when needed. See [SQLite upgrades and rollback](deployment.md#sqlite-upgrades-and-rollback) before upgrading an existing data directory.
 
 ## Verification
 
@@ -45,4 +49,4 @@ curl http://localhost:3000/health
 
 Browser tests exercise the production build on an isolated temporary data directory at port 3100. They cover desktop/mobile layouts, accessibility, all offline feature mutations, offline reload and synchronization, automatic conflicts, API outages, interrupted requests, cache upgrades, multiple tabs, and account switching. The `iphone` project uses WebKit with iPhone 17 Pro Max emulation to check mobile form sizing and menu navigation. An existing Chromium executable can be selected through `PLAYWRIGHT_CHROMIUM_EXECUTABLE`. Production does not contain the test reset or seed routes.
 
-Docker tests build an isolated image and verify closed public registration, local profile provisioning, permission repair with existing root-owned profiles, a real API sync, the application's UID/GID and lack of effective capabilities, direct non-root startup, custom data directories, symlink preservation, and unwritable-mount errors. They require a local Linux Docker daemon without user namespace remapping and do not publish ports or use your application data.
+Docker tests build an isolated image and verify closed public registration, local profile provisioning, automatic JSON-to-SQLite migration and permission repair with existing root-owned profiles, a real API sync, the application's UID/GID and lack of effective capabilities, direct non-root startup, custom data directories, symlink preservation, and unwritable-mount errors. They require a local Linux Docker daemon without user namespace remapping and do not publish ports or use your application data.

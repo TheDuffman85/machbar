@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { applyCompletion, createUser, mutateDocument, type SyncSnapshot } from '@machbar/shared';
 import { buildServer } from './server.js';
-import { JsonStore } from './store.js';
+import { SqliteStore } from './store.js';
+import { storedRecord, executeDatabase } from '../test-support/database.js';
 import { readConfig } from './config.js';
+const extraStores: SqliteStore[] = [];
 let directory: string;
 let app: Awaited<ReturnType<typeof buildServer>>;
 const origin = 'http://localhost:3000';
@@ -23,6 +25,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await app.close();
+  for (const store of extraStores.splice(0)) await store.close();
   await rm(directory, { recursive: true, force: true });
 });
 async function snapshot(id = userId): Promise<SyncSnapshot> {
@@ -79,9 +82,9 @@ describe('document synchronization API', () => {
     const saved = (await snapshot()).document;
     expect(saved.habits).toEqual(doc.habits);
     expect(saved.completions).toEqual(doc.completions);
-    expect(
-      JSON.parse(await readFile(join(directory, `${userId}.json`), 'utf8')).completions,
-    ).toEqual(doc.completions);
+    expect(JSON.parse(storedRecord(directory, 'profile', userId)!).completions).toEqual(
+      doc.completions,
+    );
   });
   it('roundtrips icons on habits, goals, and steps and rejects unknown icons', async () => {
     const doc = (await snapshot()).document;
@@ -123,7 +126,7 @@ describe('document synchronization API', () => {
         webDir: join(directory, 'no-web'),
       },
       // The API must enforce the flag even with a supplied store.
-      store: new JsonStore(directory),
+      store: new SqliteStore(directory),
     });
     const missing = randomUUID();
     const denied = await app.inject({
@@ -148,7 +151,7 @@ describe('document synchronization API', () => {
     existing.preferences.name = 'Still editable';
     expect((await sync(existing)).statusCode).toBe(200);
     expect((await snapshot()).document.preferences.name).toBe('Still editable');
-    expect(await readdir(directory)).toEqual([`${userId}.json`]);
+    expect(await readdir(directory)).toEqual(['data.db']);
   });
   it('bootstraps locally managed profiles without calculated progress or cookies', async () => {
     const response = await app.inject({
@@ -173,10 +176,9 @@ describe('document synchronization API', () => {
     expect((await sync(bob)).statusCode).toBe(200);
     expect((await snapshot()).document.preferences.name).toBe('Alice');
     expect(
-      JSON.parse(await readFile(join(directory, `${bobId}.json`), 'utf8')).preferences
-        .avatarOptions,
+      JSON.parse(storedRecord(directory, 'profile', bobId)!).preferences.avatarOptions,
     ).toEqual(bob.preferences.avatarOptions);
-    expect((await readdir(directory)).sort()).toEqual([`${userId}.json`, `${bobId}.json`].sort());
+    expect((await readdir(directory)).sort()).toEqual(['data.db']);
   });
   it('switches only to an existing saved profile', async () => {
     await sync((await snapshot()).document);
@@ -327,14 +329,16 @@ describe('document synchronization API', () => {
       ).toBe('ORIGIN_REJECTED');
     }
   });
-  it('preserves corrupt files instead of replacing them', async () => {
-    await writeFile(join(directory, `${userId}.json`), '{broken');
+  it('preserves corrupt records instead of replacing them', async () => {
+    await sync(createUser(userId));
+    executeDatabase(directory, "UPDATE profiles SET name = ''");
+    const corrupt = storedRecord(directory, 'profile', userId);
     expect(
       (await app.inject({ url: '/api/bootstrap', headers: { 'x-machbar-user': userId } })).json()
         .code,
     ).toBe('DATA_CORRUPT');
     expect((await sync(createUser(userId))).json().code).toBe('DATA_CORRUPT');
-    expect(await readFile(join(directory, `${userId}.json`), 'utf8')).toBe('{broken');
+    expect(storedRecord(directory, 'profile', userId)).toBe(corrupt);
   });
   it('exposes the configured history limit in bootstrap and sync', async () => {
     await app.close();
@@ -391,8 +395,9 @@ describe('document synchronization API', () => {
   });
 });
 describe('atomic storage', () => {
-  it('serializes concurrent writes and separates user files', async () => {
-    const store = new JsonStore(directory);
+  it('serializes concurrent writes and isolates profiles', async () => {
+    const store = new SqliteStore(directory);
+    extraStores.push(store);
     const a = randomUUID(),
       b = randomUUID();
     await Promise.all(
@@ -409,8 +414,9 @@ describe('atomic storage', () => {
     expect((await store.read(b)).preferences.name).toBe('Another user');
     expect((await readdir(directory)).filter((f) => f.endsWith('.tmp'))).toHaveLength(0);
   });
-  it('ignores interrupted temporary writes and retains the last complete file', async () => {
-    const store = new JsonStore(directory);
+  it('ignores interrupted temporary writes and retains the last committed document', async () => {
+    const store = new SqliteStore(directory);
+    extraStores.push(store);
     await store.update(userId, (doc) => {
       doc.preferences.name = 'Saved';
     });
@@ -418,7 +424,8 @@ describe('atomic storage', () => {
     expect((await store.read(userId)).preferences.name).toBe('Saved');
   });
   it('leaves saved state intact when a mutation fails', async () => {
-    const store = new JsonStore(directory);
+    const store = new SqliteStore(directory);
+    extraStores.push(store);
     await store.update(userId, (doc) => {
       doc.preferences.name = 'Saved';
     });

@@ -103,9 +103,8 @@ try {
     `
       import assert from 'node:assert/strict';
       import { readFileSync, statSync } from 'node:fs';
+      import { DatabaseSync } from 'node:sqlite';
       assert.equal(statSync('/app/data').mode & 0o777, 0o700);
-      for (const file of ['${userId}.json', '${exposedUserId}.json', 'push-state.json'])
-        assert.equal(statSync('/app/data/' + file).mode & 0o777, 0o600);
       const status = readFileSync('/proc/1/status', 'utf8');
       assert.match(status, /^Uid:\\s+1000\\s+1000\\s+1000\\s+1000$/m);
       assert.match(status, /^Gid:\\s+1000\\s+1000\\s+1000\\s+1000$/m);
@@ -119,6 +118,9 @@ try {
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
       }
+      assert.equal(statSync('/app/data/migration-backup').mode & 0o777, 0o700);
+      for (const file of ['${userId}.json', '${exposedUserId}.json', 'push-state.json'])
+        assert.equal(statSync('/app/data/migration-backup/' + file).mode & 0o777, 0o600);
       const headers = { 'X-Machbar-User': '${userId}' };
       const loaded = await fetch('http://localhost:3000/api/bootstrap', { headers });
       assert.equal(loaded.status, 200);
@@ -136,8 +138,12 @@ try {
         body: JSON.stringify(document),
       });
       assert.equal(saved.status, 200, await saved.text());
-      const stored = JSON.parse(readFileSync('/app/data/${userId}.json', 'utf8'));
-      assert.equal(stored.preferences.name, 'Synced profile');
+      const database = new DatabaseSync('/app/data/data.db', { readOnly: true });
+      const stored = database.prepare("SELECT name, revision FROM profiles WHERE user_id = ?").get('${userId}');
+      database.close();
+      assert.equal(statSync('/app/data/data.db').mode & 0o777, 0o600);
+      assert.equal(JSON.parse(readFileSync('/app/data/migration-backup/${userId}.json', 'utf8')).preferences.name, 'Existing profile');
+      assert.equal(stored.name, 'Synced profile');
       assert.equal(stored.revision, document.revision + 1);
       const outsider = crypto.randomUUID();
       const denied = await fetch('http://localhost:3000/api/bootstrap', {
@@ -170,7 +176,7 @@ try {
     const assert = require('node:assert/strict');
     const { statSync, readFileSync, lstatSync, readlinkSync } = require('node:fs');
     assert.equal(statSync('/app/data').uid, 1000);
-    assert.equal(statSync('/app/data/${userId}.json').uid, 1000);
+    assert.equal(statSync('/app/data/migration-backup/${userId}.json').uid, 1000);
     const untouched = '/app/data/untouched.txt';
     assert.equal(statSync(untouched).uid, 0);
     assert.equal(statSync(untouched).mode & 0o777, 0o444);
@@ -196,8 +202,10 @@ try {
     `
       const fs = require('node:fs');
       fs.chmodSync('/app/data', 0o777);
-      fs.chmodSync('/app/data/${exposedUserId}.json', 0o666);
-      fs.chmodSync('/app/data/push-state.json', 0o644);
+      fs.chmodSync('/app/data/migration-backup', 0o777);
+      fs.chmodSync('/app/data/migration-backup/${exposedUserId}.json', 0o666);
+      fs.chmodSync('/app/data/migration-backup/push-state.json', 0o644);
+      fs.chmodSync('/app/data/data.db', 0o666);
     `,
   ]);
   docker([
@@ -212,7 +220,8 @@ try {
     '-e',
     nodeCheck +
       `
-      for (const file of ['${exposedUserId}.json', 'push-state.json'])
+      assert.equal(fs.statSync('/app/data/migration-backup').mode & 0o777, 0o700);
+      for (const file of ['migration-backup/${exposedUserId}.json', 'migration-backup/push-state.json', 'data.db'])
         assert.equal(fs.statSync('/app/data/' + file).mode & 0o777, 0o600);
     `,
   ]);
@@ -244,10 +253,13 @@ try {
     `
       const assert = require('node:assert/strict');
       const fs = require('node:fs');
-      const path = '/app/data/${provisionedId}.json';
-      const profile = JSON.parse(fs.readFileSync(path, 'utf8'));
-      assert.equal(profile.userId, '${provisionedId}');
-      assert.equal(profile.preferences.name, 'Provisioned profile');
+      const { DatabaseSync } = require('node:sqlite');
+      const path = '/app/data/data.db';
+      const database = new DatabaseSync(path, { readOnly: true });
+      const profile = database.prepare("SELECT user_id, name FROM profiles WHERE user_id = ?").get('${provisionedId}');
+      database.close();
+      assert.equal(profile.user_id, '${provisionedId}');
+      assert.equal(profile.name, 'Provisioned profile');
       assert.equal(fs.statSync(path).mode & 0o777, 0o600);
     `,
   ]);
@@ -295,7 +307,7 @@ try {
     (error) => error.status !== 0 && /cannot prepare DATA_DIR/.test(error.stderr),
   );
   console.log(
-    'Docker checks passed: closed registration, local provisioning, permission repair, persisted sync, non-root runtime, custom DATA_DIR, symlink preservation, and unwritable-mount errors.',
+    'Docker checks passed: closed registration, local provisioning, permission repair, JSON migration and archival, persisted SQLite sync, non-root runtime, custom DATA_DIR, symlink preservation, and unwritable-mount errors.',
   );
 } finally {
   if (containerCreated) docker(['rm', '-f', container]);
