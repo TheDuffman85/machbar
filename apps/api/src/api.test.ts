@@ -15,7 +15,7 @@ beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'machbar-api-'));
   app = await buildServer({
     config: {
-      ...readConfig({ APP_URL: origin, DISABLE_USER_CREATION: 'false' }),
+      ...readConfig({ APP_URL: origin }),
       dataDir: directory,
       webDir: join(directory, 'no-web'),
     },

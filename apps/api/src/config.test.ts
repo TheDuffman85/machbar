@@ -102,8 +102,8 @@ describe('Server configuration', () => {
 });
 
 describe('User creation configuration', () => {
-  it('requires administrator provisioning by default and permits explicit public registration', () => {
-    expect(readConfig({}).disableUserCreation).toBe(true);
+  it('permits public registration by default and with explicit false', () => {
+    expect(readConfig({}).disableUserCreation).toBe(false);
     expect(readConfig({ DISABLE_USER_CREATION: 'false' }).disableUserCreation).toBe(false);
   });
   it('disables new users with true', () => {

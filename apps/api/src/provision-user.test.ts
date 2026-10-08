@@ -11,7 +11,11 @@ let directory: string;
 let config: Config;
 beforeEach(async () => {
   directory = await mkdtemp('/tmp/machbar-provision-');
-  config = { ...readConfig({}), dataDir: directory, webDir: join(directory, 'absent') };
+  config = {
+    ...readConfig({ DISABLE_USER_CREATION: 'true' }),
+    dataDir: directory,
+    webDir: join(directory, 'absent'),
+  };
 });
 afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
@@ -39,7 +43,7 @@ describe('administrator profile provisioning', () => {
     await expect(provisionUser(config)).rejects.toMatchObject({ code: 'PROFILE_LIMIT' });
     expect(await readdir(directory)).toHaveLength(1);
   });
-  it('denies outsider uploads by default and keeps provisioned profiles editable after restart', async () => {
+  it('denies outsider uploads when creation is disabled and keeps provisioned profiles editable after restart', async () => {
     config.maxStorageBytes = 2000;
     const userId = await provisionUser(config);
     for (let restart = 0; restart < 2; restart++) {

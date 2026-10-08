@@ -73,7 +73,7 @@ export function readConfig(env = process.env): Config {
     (env.DAILY_HISTORY_DAYS !== undefined && !/^\d+$/.test(env.DAILY_HISTORY_DAYS))
   )
     throw new Error('DAILY_HISTORY_DAYS must be a non-negative integer.');
-  const disableUserCreation = env.DISABLE_USER_CREATION ?? 'true';
+  const disableUserCreation = env.DISABLE_USER_CREATION ?? 'false';
   if (!['true', 'false'].includes(disableUserCreation))
     throw new Error('DISABLE_USER_CREATION must be true or false.');
   const trustedProxies = env.TRUSTED_PROXIES?.trim()

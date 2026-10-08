@@ -79,7 +79,18 @@ try {
     (error) => error.status !== 0 && /DATA_DIR.*not writable/.test(error.stderr),
   );
 
-  docker(['run', '-d', '--name', container, ...security, ...capabilities, ...mount, image]);
+  docker([
+    'run',
+    '-d',
+    '--name',
+    container,
+    ...security,
+    ...capabilities,
+    ...mount,
+    '-e',
+    'DISABLE_USER_CREATION=true',
+    image,
+  ]);
   containerCreated = true;
   docker([
     'exec',
