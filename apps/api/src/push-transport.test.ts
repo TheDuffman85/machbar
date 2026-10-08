@@ -22,7 +22,7 @@ const payload = {
   tag: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:read',
   expiresAt: Date.now() + 10000,
 };
-let statusCode: number, responseClosed: ReturnType<typeof vi.fn>, body: unknown;
+let statusCode: number, responseClosed: ReturnType<typeof vi.fn<() => void>>, body: unknown;
 beforeEach(() => {
   statusCode = 201;
   responseClosed = vi.fn();

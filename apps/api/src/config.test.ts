@@ -56,6 +56,36 @@ describe('Daily page history configuration', () => {
 });
 
 describe('Server configuration', () => {
+  it('ignores forwarding by default and accepts explicit IPv4/IPv6 proxies', () => {
+    expect(readConfig({}).trustedProxies).toEqual([]);
+    expect(readConfig({ TRUSTED_PROXIES: '  ' }).trustedProxies).toEqual([]);
+    expect(
+      readConfig({ TRUSTED_PROXIES: '192.0.2.1, 198.51.100.0/24, ::1, 2001:db8::/32' })
+        .trustedProxies,
+    ).toEqual(['192.0.2.1', '198.51.100.0/24', '::1', '2001:db8::/32']);
+  });
+
+  it.each([
+    'true',
+    'false',
+    '*',
+    'loopback',
+    'proxy.example.com',
+    '192.0.2.999',
+    '192.0.2.1,',
+    '192.0.2.1,,::1',
+    '0.0.0.0/0',
+    '::/0',
+    '192.0.2.0/33',
+    '::1/129',
+    '::1/-1',
+    '::1/1.5',
+    '::1/',
+    '::1/64/1',
+  ])('rejects unsafe or invalid proxy allowlists %s', (TRUSTED_PROXIES) => {
+    expect(() => readConfig({ TRUSTED_PROXIES })).toThrow('TRUSTED_PROXIES');
+  });
+
   it('starts in production without a session secret', () => {
     expect(readConfig({ NODE_ENV: 'production' })).toEqual(readConfig({}));
   });
@@ -72,8 +102,8 @@ describe('Server configuration', () => {
 });
 
 describe('User creation configuration', () => {
-  it('allows new users by default and with an explicit false', () => {
-    expect(readConfig({}).disableUserCreation).toBe(false);
+  it('requires administrator provisioning by default and permits explicit public registration', () => {
+    expect(readConfig({}).disableUserCreation).toBe(true);
     expect(readConfig({ DISABLE_USER_CREATION: 'false' }).disableUserCreation).toBe(false);
   });
   it('disables new users with true', () => {
@@ -98,6 +128,10 @@ describe('API rate limit configuration', () => {
     ['RATE_LIMIT_MAX_PER_IP', 'rateLimitMaxPerIp'],
     ['RATE_LIMIT_MAX_PER_USER', 'rateLimitMaxPerUser'],
     ['RATE_LIMIT_MAX_ANONYMOUS', 'rateLimitMaxAnonymous'],
+    ['RATE_LIMIT_MAX_NEW_USERS', 'rateLimitMaxNewUsers'],
+    ['MAX_PROFILES', 'maxProfiles'],
+    ['MAX_STORAGE_BYTES', 'maxStorageBytes'],
+    ['STORAGE_RESERVE_BYTES', 'storageReserveBytes'],
   ])('validates %s and accepts custom limits', (name, property) => {
     expect(readConfig({ [name]: '7' })).toHaveProperty(property, 7);
     for (const value of ['', '0', '-1', '1.5', 'abc', 'Infinity', '9007199254740992'])

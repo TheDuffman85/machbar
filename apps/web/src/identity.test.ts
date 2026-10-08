@@ -29,21 +29,22 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('profile identity persistence', () => {
-  it('backs up an existing local ID without replacing it with a stale cookie', () => {
+  it('preserves an existing local ID and deletes the stale host-wide cookie', () => {
     storage.set(localUserIdKey, alice.toUpperCase());
     cookie = `${localUserIdKey}=${bob}`;
     expect(getLocalUserId()).toBe(alice);
     expect(storage.get(localUserIdKey)).toBe(alice);
-    expect(writtenCookie).toBe(
-      `${localUserIdKey}=${alice}; Path=/; Max-Age=31536000; SameSite=Strict; Secure`,
-    );
+    expect(writtenCookie).toBe(`${localUserIdKey}=; Path=/; Max-Age=0; SameSite=Strict; Secure`);
   });
 
-  it.each([undefined, 'local'])('restores a copied cookie when the local ID is %s', (local) => {
+  it.each([undefined, 'local'])('migrates a legacy cookie when the local ID is %s', (local) => {
     if (local) storage.set(localUserIdKey, local);
     cookie = `other=value; ${localUserIdKey}=${bob.toUpperCase()}; another=value`;
     expect(getLocalUserId()).toBe(bob);
     expect(storage.get(localUserIdKey)).toBe(bob);
+    expect(writtenCookie).toContain('Max-Age=0');
+    expect(writtenCookie).not.toContain(bob);
+    expect(getLocalUserId()).toBe(bob);
   });
 
   it.each(['', 'local', '%E0%A4%A'])('ignores an invalid cookie value %s', (value) => {
@@ -54,19 +55,19 @@ describe('profile identity persistence', () => {
     expect(getLocalUserId()).toBe(id);
   });
 
-  it('updates the cookie immediately when switching profiles', () => {
+  it('keeps profile switches in origin-scoped storage', () => {
     setLocalUserId(alice);
     setLocalUserId(bob);
-    storage.clear();
     expect(getLocalUserId()).toBe(bob);
+    expect(writtenCookie).not.toContain(bob);
+    storage.clear();
+    expect(getLocalUserId()).not.toBe(bob);
   });
 
-  it('supports LAN HTTP without a Secure cookie', () => {
+  it('clears the legacy cookie on LAN HTTP', () => {
     vi.stubGlobal('location', { protocol: 'http:' });
     setLocalUserId(alice);
-    expect(writtenCookie).toBe(
-      `${localUserIdKey}=${alice}; Path=/; Max-Age=31536000; SameSite=Strict`,
-    );
+    expect(writtenCookie).toBe(`${localUserIdKey}=; Path=/; Max-Age=0; SameSite=Strict`);
   });
 
   it('still uses local storage when cookies are blocked', () => {

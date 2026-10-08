@@ -1,12 +1,15 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createECDH } from 'node:crypto';
+import { isIP } from 'node:net';
+import { storageDefaults } from './storage-budget.js';
 const projectRoot = fileURLToPath(new URL('../../../', import.meta.url));
 export type Config = {
   vapid: { publicKey: string; privateKey: string; subject: string } | null;
   appUrl: string;
   port: number;
   host: string;
+  trustedProxies: string[];
   dataDir: string;
   webDir: string;
   dailyHistoryDays: number;
@@ -15,6 +18,10 @@ export type Config = {
   rateLimitMaxPerIp: number;
   rateLimitMaxPerUser: number;
   rateLimitMaxAnonymous: number;
+  rateLimitMaxNewUsers: number;
+  maxProfiles: number;
+  maxStorageBytes: number;
+  storageReserveBytes: number;
 };
 export function readConfig(env = process.env): Config {
   const vapidValues = [env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY, env.VAPID_SUBJECT];
@@ -66,9 +73,25 @@ export function readConfig(env = process.env): Config {
     (env.DAILY_HISTORY_DAYS !== undefined && !/^\d+$/.test(env.DAILY_HISTORY_DAYS))
   )
     throw new Error('DAILY_HISTORY_DAYS must be a non-negative integer.');
-  const disableUserCreation = env.DISABLE_USER_CREATION ?? 'false';
+  const disableUserCreation = env.DISABLE_USER_CREATION ?? 'true';
   if (!['true', 'false'].includes(disableUserCreation))
     throw new Error('DISABLE_USER_CREATION must be true or false.');
+  const trustedProxies = env.TRUSTED_PROXIES?.trim()
+    ? env.TRUSTED_PROXIES.split(',').map((entry) => entry.trim())
+    : [];
+  for (const entry of trustedProxies) {
+    const [address, prefix, extra] = entry.split('/');
+    const version = isIP(address ?? '');
+    if (
+      !version ||
+      extra !== undefined ||
+      (prefix !== undefined &&
+        (!/^\d+$/.test(prefix) ||
+          Number(prefix) < 1 ||
+          Number(prefix) > (version === 4 ? 32 : 128)))
+    )
+      throw new Error('TRUSTED_PROXIES must be a comma-separated IP/CIDR allowlist (no /0).');
+  }
   const positiveInteger = (name: string, fallback: number, maximum = Number.MAX_SAFE_INTEGER) => {
     const value = env[name] ?? String(fallback);
     const parsed = Number(value);
@@ -81,6 +104,7 @@ export function readConfig(env = process.env): Config {
     appUrl: url.origin,
     port,
     host: env.HOST ?? '0.0.0.0',
+    trustedProxies,
     dataDir: resolve(projectRoot, env.DATA_DIR ?? './data'),
     webDir: resolve(projectRoot, env.WEB_DIR ?? './apps/web/dist'),
     dailyHistoryDays,
@@ -89,5 +113,12 @@ export function readConfig(env = process.env): Config {
     rateLimitMaxPerIp: positiveInteger('RATE_LIMIT_MAX_PER_IP', 300),
     rateLimitMaxPerUser: positiveInteger('RATE_LIMIT_MAX_PER_USER', 120),
     rateLimitMaxAnonymous: positiveInteger('RATE_LIMIT_MAX_ANONYMOUS', 20),
+    rateLimitMaxNewUsers: positiveInteger('RATE_LIMIT_MAX_NEW_USERS', 10),
+    maxProfiles: positiveInteger('MAX_PROFILES', storageDefaults.maxProfiles),
+    maxStorageBytes: positiveInteger('MAX_STORAGE_BYTES', storageDefaults.maxStorageBytes),
+    storageReserveBytes: positiveInteger(
+      'STORAGE_RESERVE_BYTES',
+      storageDefaults.storageReserveBytes,
+    ),
   };
 }

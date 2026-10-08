@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { avatarOptionsSchema } from './avatar.js';
+import { calendarFormatter, validTimezone } from './calendar.js';
+import { documentWithinLimits } from './limits.js';
+export { documentWithinLimits, documentLimits } from './limits.js';
 export { avatarChoices, avatarOptionsSchema, type AvatarOptions } from './avatar.js';
 export { dueReminders, nextLocalMidnight, type DueReminder } from './reminders.js';
 
@@ -18,17 +21,7 @@ export const weekdaysSchema = z
   .min(1)
   .max(7)
   .refine((v) => new Set(v).size === v.length);
-export const timezoneSchema = z
-  .string()
-  .max(100)
-  .refine((value) => {
-    try {
-      new Intl.DateTimeFormat('en', { timeZone: value });
-      return true;
-    } catch {
-      return false;
-    }
-  });
+export const timezoneSchema = z.string().max(100).refine(validTimezone);
 export const preferencesSchema = z.object({
   name: z.string().trim().min(1).max(60),
   language: z.enum(['en', 'de']),
@@ -137,7 +130,7 @@ const completionSchema = z.object({
 export const userDocumentSchema = z.object({
   schemaVersion: z.literal(1),
   revision: z.number().int().min(0),
-  userId: z.string(),
+  userId: localUserIdSchema,
   preferences: preferencesSchema,
   habits: z.array(habitSchema),
   goals: z.array(goalSchema),
@@ -149,48 +142,59 @@ export const userDocumentSchema = z.object({
   ),
 });
 // Sync validates document integrity, while all feature rules remain in the client.
-export const syncDocumentSchema = userDocumentSchema.strict().superRefine((doc, context) => {
-  const habits = new Set(doc.habits.map((h) => h.id));
-  const goals = new Set(doc.goals.map((g) => g.id));
-  const steps = new Set(doc.goals.flatMap((g) => g.steps.map((s) => s.id)));
-  const allIds = [
-    ...doc.habits,
-    ...doc.goals,
-    ...doc.goals.flatMap((g) => g.steps),
-    ...doc.gifts,
-  ].map((i) => i.id);
-  if (new Set(allIds).size !== allIds.length)
-    context.addIssue({ code: 'custom', message: 'Duplicate entity ID' });
-  for (const [key, completion] of Object.entries(doc.completions)) {
-    if (
-      key !== completion.key ||
-      key !==
-        completionKey(
-          completion.targetType,
-          completion.targetId,
-          completion.periodStart ?? completion.date,
-        ) ||
-      (completion.periodStart !== undefined &&
-        (completion.targetType !== 'habit' || completion.periodStart > completion.date)) ||
-      !(
-        completion.targetType === 'habit'
-          ? habits
-          : completion.targetType === 'goal'
-            ? goals
-            : steps
-      ).has(completion.targetId)
-    )
-      context.addIssue({
-        code: 'custom',
-        path: ['completions', key],
-        message: 'Invalid completion reference',
-      });
-  }
-  for (const gift of doc.gifts) {
-    if (!(gift.targetType === 'goal' ? goals : habits).has(gift.targetId))
-      context.addIssue({ code: 'custom', path: ['gifts'], message: 'Invalid gift reference' });
-  }
-});
+export const syncDocumentSchema = z
+  .unknown()
+  .transform((value, context) => {
+    if (!documentWithinLimits(value)) {
+      context.addIssue({ code: 'custom', message: 'Document resource limits exceeded' });
+      return z.NEVER;
+    }
+    return value;
+  })
+  .pipe(
+    userDocumentSchema.strict().superRefine((doc, context) => {
+      const habits = new Set(doc.habits.map((h) => h.id));
+      const goals = new Set(doc.goals.map((g) => g.id));
+      const steps = new Set(doc.goals.flatMap((g) => g.steps.map((s) => s.id)));
+      const allIds = [
+        ...doc.habits,
+        ...doc.goals,
+        ...doc.goals.flatMap((g) => g.steps),
+        ...doc.gifts,
+      ].map((i) => i.id);
+      if (new Set(allIds).size !== allIds.length)
+        context.addIssue({ code: 'custom', message: 'Duplicate entity ID' });
+      for (const [key, completion] of Object.entries(doc.completions)) {
+        if (
+          key !== completion.key ||
+          key !==
+            completionKey(
+              completion.targetType,
+              completion.targetId,
+              completion.periodStart ?? completion.date,
+            ) ||
+          (completion.periodStart !== undefined &&
+            (completion.targetType !== 'habit' || completion.periodStart > completion.date)) ||
+          !(
+            completion.targetType === 'habit'
+              ? habits
+              : completion.targetType === 'goal'
+                ? goals
+                : steps
+          ).has(completion.targetId)
+        )
+          context.addIssue({
+            code: 'custom',
+            path: ['completions', key],
+            message: 'Invalid completion reference',
+          });
+      }
+      for (const gift of doc.gifts) {
+        if (!(gift.targetType === 'goal' ? goals : habits).has(gift.targetId))
+          context.addIssue({ code: 'custom', path: ['gifts'], message: 'Invalid gift reference' });
+      }
+    }),
+  );
 export const completionOperationSchema = z
   .object({
     operationId: id,
@@ -238,12 +242,7 @@ export type Progress = {
 };
 
 export function localDate(timezone: string, now: Date = new Date()): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(now);
+  const parts = calendarFormatter(timezone).formatToParts(now);
   const part = (type: string) => parts.find((p) => p.type === type)!.value;
   return `${part('year')}-${part('month')}-${part('day')}`;
 }

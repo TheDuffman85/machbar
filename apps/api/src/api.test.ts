@@ -15,7 +15,7 @@ beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'machbar-api-'));
   app = await buildServer({
     config: {
-      ...readConfig({ APP_URL: origin }),
+      ...readConfig({ APP_URL: origin, DISABLE_USER_CREATION: 'false' }),
       dataDir: directory,
       webDir: join(directory, 'no-web'),
     },
@@ -340,7 +340,11 @@ describe('document synchronization API', () => {
     await app.close();
     app = await buildServer({
       config: {
-        ...readConfig({ APP_URL: origin, DAILY_HISTORY_DAYS: '7' }),
+        ...readConfig({
+          APP_URL: origin,
+          DAILY_HISTORY_DAYS: '7',
+          DISABLE_USER_CREATION: 'false',
+        }),
         dataDir: directory,
         webDir: join(directory, 'no-web'),
       },

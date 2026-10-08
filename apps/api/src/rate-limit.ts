@@ -9,28 +9,37 @@ export function registerRateLimits(app: FastifyInstance, config: Config) {
   const counters = new Map<string, number>();
   const maxCounters = 10_000;
   let resetAt = Date.now() + config.rateLimitWindowSeconds * 1000;
-  const consume = (key: string, limit: number) => {
-    const count = counters.get(key);
-    if (count === undefined && counters.size >= maxCounters) return false;
-    if ((count ?? 0) >= limit) return false;
-    counters.set(key, (count ?? 0) + 1);
+  const consume = (limits: Array<[string, number]>) => {
+    // Admit all counters together. Already-rejected traffic must not drain
+    // another allowance, including when several clients share an address.
+    let newCounters = 0;
+    for (const [key, limit] of limits) {
+      const count = counters.get(key);
+      if ((count ?? 0) >= limit) return false;
+      if (count === undefined) newCounters++;
+    }
+    if (counters.size + newCounters > maxCounters) return false;
+    for (const [key] of limits) counters.set(key, (counters.get(key) ?? 0) + 1);
     return true;
+  };
+  const reset = () => {
+    if (Date.now() >= resetAt) {
+      counters.clear();
+      resetAt = Date.now() + config.rateLimitWindowSeconds * 1000;
+    }
   };
   app.addHook('onRequest', async (request, reply) => {
     if (!isApiRequest(request)) return;
     const now = Date.now();
-    if (now >= resetAt) {
-      counters.clear();
-      resetAt = now + config.rateLimitWindowSeconds * 1000;
-    }
+    reset();
     const identity = localUserIdSchema.safeParse(request.headers['x-machbar-user']);
-    // Fastify uses the socket address by default. Do not trust client-supplied
-    // forwarding headers: neither they nor rotating UUIDs may bypass IP limits.
-    const allowed =
-      consume(`ip:${request.ip}`, config.rateLimitMaxPerIp) &&
-      (identity.success
-        ? consume(`user:${identity.data}`, config.rateLimitMaxPerUser)
-        : consume(`anonymous:${request.ip}`, config.rateLimitMaxAnonymous));
+    // request.ip only honors forwarding through explicitly trusted proxy hops.
+    const allowed = consume([
+      [`ip:${request.ip}`, config.rateLimitMaxPerIp],
+      identity.success
+        ? [`user:${identity.data}`, config.rateLimitMaxPerUser]
+        : [`anonymous:${request.ip}`, config.rateLimitMaxAnonymous],
+    ]);
     if (!allowed)
       return reply
         .code(429)
@@ -38,4 +47,12 @@ export function registerRateLimits(app: FastifyInstance, config: Config) {
         .send({ code: 'RATE_LIMITED' });
   });
   app.addHook('onClose', async () => counters.clear());
+  return (ip: string): boolean => {
+    reset();
+    // Global admission also bounds creation spread across addresses and UUIDs.
+    return consume([
+      ['creation:global', config.rateLimitMaxNewUsers],
+      [`creation:${ip}`, config.rateLimitMaxNewUsers],
+    ]);
+  };
 }

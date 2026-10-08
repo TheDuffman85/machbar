@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
@@ -6,12 +6,33 @@ import {
   DomainError,
   localUserIdSchema,
   userDocumentSchema,
+  documentWithinLimits,
+  documentLimits,
   type UserDocument,
 } from '@machbar/shared';
+import { StorageBudget } from './storage-budget.js';
+
+export const maxDocumentBytes = documentLimits.maxBytes;
 
 export class JsonStore {
   private locks = new Map<string, Promise<unknown>>();
-  constructor(public directory: string) {}
+  constructor(
+    public directory: string,
+    private budget = new StorageBudget(directory),
+  ) {}
+  useBudget(budget: StorageBudget) {
+    this.budget = budget;
+  }
+  async exists(userId: string): Promise<boolean> {
+    try {
+      const file = await lstat(this.path(userId));
+      if (!file.isFile()) throw new DomainError('DATA_CORRUPT', 500);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
+  }
   private path(userId: string) {
     if (!localUserIdSchema.safeParse(userId).success)
       throw new DomainError('INVALID_IDENTITY', 400);
@@ -49,28 +70,34 @@ export class JsonStore {
     }
   }
   private async save(doc: UserDocument) {
+    if (!documentWithinLimits(doc)) throw new DomainError('DOCUMENT_LIMIT', 413);
     userDocumentSchema.parse(doc);
+    const contents = JSON.stringify(doc);
+    const bytes = Buffer.byteLength(contents);
+    if (bytes > maxDocumentBytes) throw new DomainError('DOCUMENT_LIMIT', 413);
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const target = this.path(doc.userId);
     const temp = `${target}.${randomUUID()}.tmp`;
-    try {
-      const file = await open(temp, 'wx', 0o600);
+    return this.budget.commit(target, bytes, async () => {
       try {
-        await file.writeFile(JSON.stringify(doc, null, 2));
-        await file.sync();
+        const file = await open(temp, 'wx', 0o600);
+        try {
+          await file.writeFile(contents);
+          await file.sync();
+        } finally {
+          await file.close();
+        }
+        await rename(temp, target);
+        const directory = await open(this.directory, 'r');
+        try {
+          await directory.sync();
+        } finally {
+          await directory.close();
+        }
       } finally {
-        await file.close();
+        await unlink(temp).catch(() => {});
       }
-      await rename(temp, target);
-      const directory = await open(this.directory, 'r');
-      try {
-        await directory.sync();
-      } finally {
-        await directory.close();
-      }
-    } finally {
-      await unlink(temp).catch(() => {});
-    }
+    });
   }
   async read(userId: string, allowCreate = true): Promise<UserDocument> {
     return this.serial(userId, () => this.load(userId, false, allowCreate));

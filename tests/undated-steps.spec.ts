@@ -17,7 +17,9 @@ const step = (title: string, date: string | null = null): Step => ({
 });
 
 test.beforeEach(async ({ request }) => {
-  await request.post('/test/reset', { headers: { origin: base } });
+  await request.post('/api/test/reset', {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+  });
 });
 
 async function onboard(page: Page) {
@@ -84,7 +86,12 @@ for (const language of ['en', 'de'] as const) {
       expectedVersion: 0,
     });
     expect(
-      (await page.request.post('/test/seed', { headers: { origin: base }, data: doc })).ok(),
+      (
+        await page.request.post('/api/test/seed', {
+          headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+          data: doc,
+        })
+      ).ok(),
     ).toBe(true);
     await page.reload();
     const labels =
@@ -214,7 +221,12 @@ test('past days show only undated wins from that day and support undo and recomp
     });
   }
   expect(
-    (await page.request.post('/test/seed', { headers: { origin: base }, data: doc })).ok(),
+    (
+      await page.request.post('/api/test/seed', {
+        headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+        data: doc,
+      })
+    ).ok(),
   ).toBe(true);
   await page.reload();
   const optional = page.getByRole('region', { name: /Whenever you have time/ });

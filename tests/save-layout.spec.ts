@@ -2,7 +2,12 @@ import { expect, test, type Page } from '@playwright/test';
 import { readSnapshot } from './helpers.js';
 
 test.beforeEach(async ({ request, page }) => {
-  await request.post('/test/reset', { headers: { origin: 'http://localhost:3100' } });
+  await request.post('/api/test/reset', {
+    headers: {
+      origin: 'http://localhost:3100',
+      'X-Machbar-User': '00000000-0000-4000-8000-000000000001',
+    },
+  });
   await page.goto('/');
   await page.getByLabel('What should we call you?').fill('Alex');
   await page.getByRole('button', { name: 'Let’s begin' }).click();
@@ -55,9 +60,7 @@ for (const scrolled of [false, true]) {
   });
 }
 
-test('checkoffs keep the page in place and show sync status without a toast', async ({
-  page,
-}) => {
+test('checkoffs keep the page in place and show sync status without a toast', async ({ page }) => {
   await page.locator('nav:visible').getByRole('link', { name: 'Habits', exact: true }).click();
   await page.getByRole('button', { name: 'Add a habit', exact: true }).first().click();
   await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Take a walk');

@@ -12,7 +12,9 @@ test.use({
   },
 });
 test.beforeEach(async ({ request }) => {
-  await request.post(`${base}/test/reset`, { headers: { origin: base } });
+  await request.post(`${base}/api/test/reset`, {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+  });
 });
 async function ready(page: Page) {
   await page.goto('/');
@@ -44,7 +46,7 @@ async function deliver(worker: Worker, data: unknown) {
       body: n.body,
       tag: n.tag,
       icon: n.icon,
-      badge: n.badge,
+      badge: (n as Notification & { badge: string }).badge,
       data: n.data,
     }));
   }, data);
@@ -247,7 +249,10 @@ test('device opt-in uses the installed worker, displays push content offline, an
   doc.userId = bob;
   doc.revision = 0;
   doc.preferences.name = 'Bob';
-  await request.post(`${base}/test/seed`, { headers: { origin: base }, data: doc });
+  await request.post(`${base}/api/test/seed`, {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+    data: doc,
+  });
   await page.getByRole('button', { name: 'Profile menu', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Switch User', exact: true }).click();
   await page.getByLabel('Existing user ID').fill(bob);

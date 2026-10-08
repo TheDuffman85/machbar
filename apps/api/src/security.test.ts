@@ -17,6 +17,7 @@ beforeEach(async () => {
     config: {
       ...readConfig({
         APP_URL: origin,
+        DISABLE_USER_CREATION: 'false',
         RATE_LIMIT_MAX_PER_IP: '6',
         RATE_LIMIT_MAX_PER_USER: '3',
         RATE_LIMIT_MAX_ANONYMOUS: '2',
@@ -94,6 +95,112 @@ describe('profile access keys', () => {
 });
 
 describe('API rate limits', () => {
+  it('does not charge rejected anonymous or per-user traffic to the shared IP allowance', async () => {
+    for (let index = 0; index < 30; index++)
+      expect((await app.inject('/api/bootstrap')).statusCode).toBe(index < 2 ? 401 : 429);
+    const userId = randomUUID();
+    for (let index = 0; index < 30; index++)
+      expect(
+        (await app.inject({ url: '/api/bootstrap', headers: { 'x-machbar-user': userId } }))
+          .statusCode,
+      ).toBe(index < 3 ? 200 : 429);
+    expect(
+      (await app.inject({ url: '/api/bootstrap', headers: { 'x-machbar-user': randomUUID() } }))
+        .statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ url: '/api/bootstrap', headers: { 'x-machbar-user': randomUUID() } }))
+        .statusCode,
+    ).toBe(429);
+  });
+
+  it.each(['192.0.2.1', '192.0.2.0/24', '::1', '2001:db8::/32'])(
+    'isolates forwarded clients through the trusted proxy %s',
+    async (TRUSTED_PROXIES) => {
+      await app.close();
+      app = await buildServer({
+        config: {
+          ...readConfig({ TRUSTED_PROXIES, DISABLE_USER_CREATION: 'false' }),
+          dataDir: directory,
+          webDir: join(directory, 'no-web'),
+        },
+      });
+      const remoteAddress = TRUSTED_PROXIES.split('/')[0]!;
+      for (let index = 0; index < 300; index++)
+        expect(
+          (
+            await app.inject({
+              url: '/api/bootstrap',
+              remoteAddress,
+              headers: { 'x-forwarded-for': '198.51.100.1' },
+            })
+          ).statusCode,
+        ).toBe(index < 20 ? 401 : 429);
+      expect(
+        (
+          await app.inject({
+            url: '/api/bootstrap',
+            remoteAddress,
+            headers: { 'x-forwarded-for': '198.51.100.2', 'x-machbar-user': randomUUID() },
+          })
+        ).statusCode,
+      ).toBe(200);
+      // Rotating UUIDs from one forwarded client still exhaust its IP budget.
+      for (let index = 0; index < 280; index++)
+        expect(
+          (
+            await app.inject({
+              url: '/api/bootstrap',
+              remoteAddress,
+              headers: { 'x-forwarded-for': '198.51.100.1', 'x-machbar-user': randomUUID() },
+            })
+          ).statusCode,
+        ).toBe(200);
+      expect(
+        (
+          await app.inject({
+            url: '/api/bootstrap',
+            remoteAddress,
+            headers: { 'x-forwarded-for': '198.51.100.1', 'x-machbar-user': randomUUID() },
+          })
+        ).statusCode,
+      ).toBe(429);
+    },
+  );
+
+  it('ignores spoofed forwarding from direct clients and stops at the first untrusted hop', async () => {
+    await app.close();
+    app = await buildServer({
+      config: {
+        ...readConfig({
+          TRUSTED_PROXIES: '192.0.2.1',
+          RATE_LIMIT_MAX_PER_IP: '2',
+          DISABLE_USER_CREATION: 'false',
+        }),
+        dataDir: directory,
+        webDir: join(directory, 'no-web'),
+      },
+    });
+    for (const remoteAddress of ['203.0.113.1', '192.0.2.1']) {
+      for (let index = 0; index < 3; index++) {
+        const spoofed = `198.51.100.${index + 1}`;
+        expect(
+          (
+            await app.inject({
+              url: '/api/bootstrap',
+              remoteAddress,
+              headers: {
+                'x-machbar-user': randomUUID(),
+                'x-forwarded-for':
+                  remoteAddress === '192.0.2.1' ? `${spoofed}, 203.0.113.2` : spoofed,
+              },
+            })
+          ).statusCode,
+        ).toBe(index < 2 ? 200 : 429);
+      }
+    }
+  });
+
   it('counts missing and invalid IDs together before identity checks or body parsing', async () => {
     expect((await app.inject('/api/bootstrap')).statusCode).toBe(401);
     expect(

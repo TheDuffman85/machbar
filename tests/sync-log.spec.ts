@@ -25,7 +25,12 @@ async function storedLog(page: Page) {
 }
 
 test.beforeEach(async ({ request, page }) => {
-  await request.post('/test/reset', { headers: { origin: 'http://localhost:3100' } });
+  await request.post('/api/test/reset', {
+    headers: {
+      origin: 'http://localhost:3100',
+      'X-Machbar-User': '00000000-0000-4000-8000-000000000001',
+    },
+  });
   await page.goto('/');
   await page.getByLabel('What should we call you?').fill('Sync friend');
   await page.getByRole('button', { name: 'Let’s begin' }).click();

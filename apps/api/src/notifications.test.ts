@@ -9,6 +9,7 @@ import { readConfig } from './config.js';
 import { buildServer } from './server.js';
 import { JsonStore } from './store.js';
 import { PushStore, ReminderScheduler } from './notifications.js';
+import { StorageBudget } from './storage-budget.js';
 import {
   isPublicAddress,
   subscriptionSchema,
@@ -65,6 +66,7 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await app.close();
   await rm(directory, { recursive: true, force: true });
 });
@@ -83,6 +85,69 @@ function scheduler() {
 }
 
 describe('notification API', () => {
+  it('rejects nonexistent profiles before loading or rewriting shared push state', async () => {
+    await register();
+    await app.close();
+    app = await buildServer({
+      config: { ...readConfig({}), dataDir: directory, webDir: join(directory, 'absent') },
+    });
+    const access = vi.spyOn(PushStore.prototype, 'access');
+    const commit = vi.spyOn(StorageBudget.prototype, 'commit');
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/api/notifications/subscription',
+      headers: headers(randomUUID()),
+      payload: { bindingId: randomUUID() },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ code: 'USER_NOT_FOUND' });
+    expect(access).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+  });
+  it('does not persist missing bindings or idempotent deletion retries', async () => {
+    const bindingId = await register();
+    await push.access((state) => {
+      for (let i = 0; i < 1000; i++)
+        state.dispatches[`${bindingId}:reminder-${i}`] = {
+          expiresAt: now.getTime() + 86_400_000,
+          attempts: 1,
+          retryAt: null,
+        };
+    }, true);
+    const commit = vi.spyOn(StorageBudget.prototype, 'commit');
+    const remove = (id: string) =>
+      app.inject({
+        method: 'DELETE',
+        url: '/api/notifications/subscription',
+        headers: headers(),
+        payload: { bindingId: id },
+      });
+    const initial = await readFile(join(directory, 'push-state.json'), 'utf8');
+    expect((await remove(randomUUID())).statusCode).toBe(200);
+    expect(commit).not.toHaveBeenCalled();
+    expect(await readFile(join(directory, 'push-state.json'), 'utf8')).toBe(initial);
+    expect((await remove(bindingId)).statusCode).toBe(200);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(await push.access((state) => state)).toEqual({ bindings: [], dispatches: {} });
+    commit.mockClear();
+    expect((await remove(bindingId)).statusCode).toBe(200);
+    expect(commit).not.toHaveBeenCalled();
+  });
+  it('does not create a push-state file when a saved profile deletes an unknown binding', async () => {
+    expect(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: '/api/notifications/subscription',
+          headers: headers(),
+          payload: { bindingId: randomUUID() },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await expect(stat(join(directory, 'push-state.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
   it('exposes only the public key and requires identity and same-origin writes', async () => {
     expect((await app.inject({ url: '/api/notifications/config' })).statusCode).toBe(401);
     const response = await app.inject({ url: '/api/notifications/config', headers: headers() });
@@ -241,6 +306,90 @@ describe('notification API', () => {
   });
 });
 describe('notification scheduler', () => {
+  it('rotates after a slow send and retains progress for a 500-reminder backlog', async () => {
+    await profiles.update(userId, (doc) => {
+      doc.habits = Array.from({ length: 500 }, () => ({ ...doc.habits[0]!, id: randomUUID() }));
+    });
+    await profiles.update(otherId, (doc) => {
+      const other = createUser(otherId);
+      other.preferences.timezone = 'Europe/Berlin';
+      mutateDocument(
+        other,
+        '/api/habits',
+        'POST',
+        {
+          title: 'Other profile',
+          weekdays: [0, 1, 2, 3, 4, 5, 6],
+          reminderTime: '09:00',
+        },
+        randomUUID(),
+        now,
+      );
+      Object.assign(doc, other);
+    });
+    await register('slow');
+    await register('fast', otherId);
+    let elapsed = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => elapsed);
+    send.mockImplementation(async (destination) => {
+      if (destination.endpoint.endsWith('/slow')) elapsed += 1100;
+    });
+    const worker = scheduler();
+    for (let attempt = 0; attempt < 3; attempt++) await worker.tick();
+    expect(send.mock.calls.map((call) => call[0].endpoint)).toEqual([
+      subscription('slow').endpoint,
+      subscription('fast').endpoint,
+      subscription('slow').endpoint,
+      subscription('slow').endpoint,
+    ]);
+    expect(new Set(send.mock.calls.map((call) => call[1].tag)).size).toBe(4);
+  });
+
+  it('shares fast-backlog work between devices and resumes after already-claimed receipts', async () => {
+    await profiles.update(userId, (doc) => {
+      doc.habits = Array.from({ length: 75 }, () => ({ ...doc.habits[0]!, id: randomUUID() }));
+    });
+    await register('one');
+    await register('two');
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const worker = scheduler();
+    await worker.tick();
+    expect(
+      send.mock.calls.filter((call) => call[0].endpoint === subscription('one').endpoint),
+    ).toHaveLength(10);
+    expect(
+      send.mock.calls.filter((call) => call[0].endpoint === subscription('two').endpoint),
+    ).toHaveLength(10);
+    for (let attempt = 0; attempt < 7; attempt++) await worker.tick();
+    expect(send).toHaveBeenCalledTimes(150);
+    expect(new Set(send.mock.calls.map((call) => call[1].tag)).size).toBe(150);
+    const restarted = scheduler();
+    await restarted.tick();
+    await profiles.update(userId, (doc) => {
+      doc.habits.push({ ...doc.habits[0]!, id: randomUUID() });
+    });
+    for (let attempt = 0; attempt < 3; attempt++) await restarted.tick();
+    expect(send).toHaveBeenCalledTimes(152);
+    expect(new Set(send.mock.calls.map((call) => call[1].tag)).size).toBe(152);
+  });
+
+  it('bounds dispatch work and resumes later reminders without replaying receipts', async () => {
+    await profiles.update(userId, (doc) => {
+      const habit = doc.habits[0]!;
+      doc.habits = Array.from({ length: 75 }, () => ({ ...habit, id: randomUUID() }));
+    });
+    await register();
+    const worker = scheduler();
+    await worker.tick();
+    expect(send.mock.calls.length).toBeGreaterThan(0);
+    expect(send.mock.calls.length).toBeLessThanOrEqual(50);
+    for (let attempt = 0; attempt < 10 && send.mock.calls.length < 75; attempt++)
+      await worker.tick();
+    expect(send).toHaveBeenCalledTimes(75);
+    expect(new Set(send.mock.calls.map((call) => call[1].tag)).size).toBe(75);
+    await worker.tick();
+    expect(send).toHaveBeenCalledTimes(75);
+  });
   it('sends to each device once, survives restart, and ignores same-day edits and undo', async () => {
     await register();
     await register('two');

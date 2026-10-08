@@ -1,14 +1,28 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { access } from 'node:fs/promises';
 import { z } from 'zod';
-import { DomainError, localUserIdSchema, syncDocumentSchema } from '@machbar/shared';
+import {
+  DomainError,
+  documentWithinLimits,
+  localUserIdSchema,
+  syncDocumentSchema,
+} from '@machbar/shared';
 import { type Config, readConfig } from './config.js';
-import { JsonStore } from './store.js';
+import { JsonStore, maxDocumentBytes } from './store.js';
+import { StorageBudget } from './storage-budget.js';
 import { registerIdentity } from './identity.js';
 import { registerRateLimits } from './rate-limit.js';
 import { isApiRequest } from './api-request.js';
 import { registerNotifications, type NotificationOptions } from './notifications.js';
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    holdsApiSlot: boolean;
+    pendingApiWork: number;
+    apiResponseFinished: boolean;
+  }
+}
 
 export async function buildServer(
   options: {
@@ -19,7 +33,9 @@ export async function buildServer(
   } = {},
 ) {
   const config = options.config ?? readConfig();
-  const store = options.store ?? new JsonStore(config.dataDir);
+  const budget = new StorageBudget(config.dataDir, config);
+  const store = options.store ?? new JsonStore(config.dataDir, budget);
+  store.useBudget(budget);
   const app = Fastify({
     logger: options.logger
       ? {
@@ -32,7 +48,11 @@ export async function buildServer(
           },
         }
       : false,
-    bodyLimit: 8 * 1024 * 1024,
+    bodyLimit: maxDocumentBytes,
+    requestTimeout: 30_000,
+    connectionTimeout: 15_000,
+    keepAliveTimeout: 5_000,
+    trustProxy: config.trustedProxies.length ? config.trustedProxies : false,
   });
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof z.ZodError) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
@@ -60,19 +80,91 @@ export async function buildServer(
     if (isApiRequest(request)) reply.header('Cache-Control', 'no-store');
     return payload;
   });
-  registerRateLimits(app, config);
+  app.server.maxConnections = 128;
+  app.addHook('onRequest', async (request, reply) => {
+    // Only API routes accept bodies. Reject other methods before Fastify reads
+    // or parses them, including OPTIONS and unknown static/health paths.
+    if (!isApiRequest(request) && !['GET', 'HEAD'].includes(request.method))
+      return reply.code(404).send({ code: 'NOT_FOUND' });
+  });
+  const admitUser = registerRateLimits(app, config);
   registerIdentity(app, config);
-  registerNotifications(app, config, store, options.notifications);
+  let inFlight = 0;
+  app.decorateRequest('holdsApiSlot', false);
+  app.decorateRequest('pendingApiWork', 0);
+  app.decorateRequest('apiResponseFinished', false);
+  const release = (request: FastifyRequest) => {
+    if (!request.holdsApiSlot || request.pendingApiWork > 0) return;
+    request.holdsApiSlot = false;
+    inFlight--;
+  };
+  const finishResponse = (request: FastifyRequest) => {
+    request.apiResponseFinished = true;
+    release(request);
+  };
+  const runApiWork = async <T>(request: FastifyRequest, work: () => T | Promise<T>) => {
+    request.pendingApiWork++;
+    try {
+      return await work();
+    } finally {
+      request.pendingApiWork--;
+      if (request.apiResponseFinished) release(request);
+    }
+  };
+  app.addHook('onRequest', async (request, reply) => {
+    if (!isApiRequest(request)) return;
+    if (inFlight >= 16) throw new DomainError('SERVER_BUSY', 503);
+    request.holdsApiSlot = true;
+    inFlight++;
+    // Closing a response does not cancel storage or push work. Keep its slot
+    // until that work settles, including handlers that reject after disconnect.
+    reply.raw.once('close', () => finishResponse(request));
+  });
+  app.addHook('onResponse', async (request) => finishResponse(request));
+  app.addHook('onRequestAbort', async (request) => finishResponse(request));
+  app.addHook('onTimeout', async (request, reply) => {
+    finishResponse(request);
+    reply.raw.destroy();
+  });
+  app.addHook('onRoute', (route) => {
+    if (!route.url.startsWith('/api/')) return;
+    const handler = route.handler;
+    route.handler = async function (request, reply) {
+      if (request.apiResponseFinished) {
+        reply.hijack();
+        return;
+      }
+      return runApiWork(request, () => handler.call(this, request, reply));
+    };
+  });
+  registerNotifications(app, config, store, options.notifications, budget);
   const bootstrap = (document: Awaited<ReturnType<JsonStore['read']>>) => ({
     document,
     dailyHistoryDays: config.dailyHistoryDays,
   });
   const revision = (headers: Record<string, unknown>) => {
     const value = headers['if-match'];
-    if (typeof value !== 'string' || !/^\d+$/.test(value))
+    if (typeof value !== 'string' || !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))
       throw new DomainError('REVISION_REQUIRED', 428);
     return Number(value);
   };
+  // Reject missing revisions and closed-profile creation before reading/parsing
+  // attacker-supplied JSON. Route identity also covers encoded API paths.
+  app.addHook('onRequest', async (request, reply) => {
+    if (request.routeOptions.url !== '/api/sync' || request.method !== 'PUT') return;
+    await runApiWork(request, async () => {
+      revision(request.headers);
+      if (!(await store.exists(request.userId))) {
+        if (config.disableUserCreation) throw new DomainError('USER_CREATION_DISABLED', 403);
+        if (!admitUser(request.ip))
+          return reply
+            .code(429)
+            .header('Retry-After', String(config.rateLimitWindowSeconds))
+            .send({ code: 'RATE_LIMITED' });
+      }
+    });
+    if (request.apiResponseFinished) reply.hijack();
+  });
   app.get('/health', async () => ({ status: 'ok' }));
   app.get('/api/bootstrap', async (request) =>
     bootstrap(await store.read(request.userId, !config.disableUserCreation)),
@@ -83,14 +175,17 @@ export async function buildServer(
     return bootstrap(await store.readExisting(request.userId));
   });
   app.put('/api/sync', async (request) => {
-    const document = syncDocumentSchema.parse(request.body);
-    if (document.userId !== request.userId) throw new DomainError('ACCOUNT_CHANGED', 409);
     const expectedRevision = revision(request.headers);
-    if (document.revision !== expectedRevision) throw new DomainError('DOCUMENT_CONFLICT', 409);
+    const identity = z
+      .object({ userId: localUserIdSchema, revision: z.number().int().nonnegative() })
+      .parse(request.body);
+    if (identity.userId !== request.userId) throw new DomainError('ACCOUNT_CHANGED', 409);
+    if (identity.revision !== expectedRevision) throw new DomainError('DOCUMENT_CONFLICT', 409);
+    if (!documentWithinLimits(request.body)) throw new DomainError('DOCUMENT_LIMIT', 413);
     const result = await store.update(
       request.userId,
       (doc) => {
-        Object.assign(doc, document);
+        Object.assign(doc, syncDocumentSchema.parse(request.body));
       },
       expectedRevision,
       !config.disableUserCreation,
@@ -107,7 +202,7 @@ export async function buildServer(
       index: 'index.html',
       setHeaders(response, path) {
         if (path.endsWith('sw.js') || path.endsWith('index.html'))
-          response.setHeader('Cache-Control', 'no-cache');
+          response.header('Cache-Control', 'no-cache');
       },
     });
     app.setNotFoundHandler((request, reply) => {

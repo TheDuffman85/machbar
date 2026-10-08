@@ -4,7 +4,9 @@ import { readSnapshot, writeSnapshot } from './helpers.js';
 
 const base = 'http://localhost:3100';
 test.beforeEach(async ({ request }) => {
-  await request.post(`${base}/test/reset`, { headers: { origin: base } });
+  await request.post(`${base}/api/test/reset`, {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+  });
 });
 async function onboard(page: Page) {
   await page.goto('/');

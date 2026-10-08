@@ -1,10 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 import { AxeBuilder } from '@axe-core/playwright';
+import { createUser } from '../packages/shared/src/index.js';
 import { readSnapshot } from './helpers.js';
 
 const base = 'http://localhost:3100';
 test.beforeEach(async ({ request }) => {
-  await request.post(`${base}/test/reset`, { headers: { origin: base } });
+  await request.post(`${base}/api/test/reset`, {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+  });
 });
 
 async function onboard(page: Page, name: string) {
@@ -289,6 +292,31 @@ test('LAN HTTP offers QR uploads when the camera is unavailable and rejects unre
   await expect(page.getByRole('button', { name: 'Switch profile', exact: true })).toBeDisabled();
 });
 
+test('a provisioned profile can finish onboarding while public registration is closed', async ({
+  page,
+  request,
+}) => {
+  const id = crypto.randomUUID();
+  await request.post('/api/test/seed', {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+    data: createUser(id),
+  });
+  await request.post('/api/test/config', {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+    data: { disableUserCreation: true },
+  });
+  await page.goto(base);
+  await page.getByLabel('Existing user ID').fill(id);
+  await page.getByRole('button', { name: 'Switch profile', exact: true }).click();
+  await page.getByLabel('What should we call you?').fill('Provisioned friend');
+  await page.getByRole('button', { name: 'Let’s begin' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect((await readSnapshot(page)).document.preferences.onboarded).toBe(true);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Hey, Provisioned friend' })).toBeVisible();
+  expect((await readSnapshot(page)).document.userId).toBe(id);
+});
+
 test('disabled user creation offers only existing profiles and preserves normal use after switching', async ({
   page,
   request,
@@ -296,8 +324,8 @@ test('disabled user creation offers only existing profiles and preserves normal 
 }) => {
   await onboard(page, 'Existing friend');
   const id = (await readSnapshot(page)).document.userId;
-  await request.post('/test/config', {
-    headers: { origin: base },
+  await request.post('/api/test/config', {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
     data: { disableUserCreation: true },
   });
   const freshContext = await browser.newContext({ locale: 'en-US' });
@@ -330,8 +358,8 @@ test('an unfinished cached profile cannot resume onboarding after creation is di
 }) => {
   await page.goto(base);
   await expect(page.getByLabel('What should we call you?')).toBeVisible();
-  await request.post('/test/config', {
-    headers: { origin: base },
+  await request.post('/api/test/config', {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
     data: { disableUserCreation: true },
   });
   await page.reload();

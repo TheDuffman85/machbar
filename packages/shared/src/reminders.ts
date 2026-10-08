@@ -1,9 +1,11 @@
 import { localDate, occurrenceFor, completionKey, type UserDocument } from './index.js';
+import { calendarFormatter } from './calendar.js';
 
 export type DueReminder = {
   habitId: string;
   date: string;
   title: string;
+  language: UserDocument['preferences']['language'];
   expiresAt: number;
 };
 
@@ -35,12 +37,7 @@ export function dueReminders(doc: UserDocument, now: Date): DueReminder[] {
       doc.completions[completionKey('habit', habit.id, occurrence.start)]?.completed
     )
       continue;
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: schedule.timezone,
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(now);
+    const parts = calendarFormatter(schedule.timezone, true).formatToParts(now);
     const time = `${parts.find((p) => p.type === 'hour')!.value}:${parts.find((p) => p.type === 'minute')!.value}`;
     // Comparing wall times catches up after downtime and missing DST hours.
     if (time < habit.reminderTime) continue;
@@ -48,6 +45,7 @@ export function dueReminders(doc: UserDocument, now: Date): DueReminder[] {
       habitId: habit.id,
       date,
       title: habit.title,
+      language: doc.preferences.language,
       expiresAt: nextLocalMidnight(schedule.timezone, now),
     });
   }

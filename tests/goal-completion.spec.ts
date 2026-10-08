@@ -19,7 +19,9 @@ const goal = (title: string): Goal => ({
 });
 
 test.beforeEach(async ({ request }) => {
-  await request.post('/test/reset', { headers: { origin: base } });
+  await request.post('/api/test/reset', {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+  });
 });
 
 async function onboard(page: Page) {
@@ -50,7 +52,10 @@ for (const language of ['en', 'de'] as const) {
     archived.archivedAt = new Date().toISOString();
     doc.preferences.language = language;
     doc.goals = [active, allArchived, archived, goal('Unrelated active goal')];
-    await page.request.post('/test/seed', { headers: { origin: base }, data: doc });
+    await page.request.post('/api/test/seed', {
+      headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+      data: doc,
+    });
     await page.goto('/goals');
     await expect(page.getByText('Active step', { exact: true })).toBeVisible();
     await expect(page.getByText('Archived step', { exact: true })).toHaveCount(0);
@@ -103,7 +108,10 @@ for (const language of ['en', 'de'] as const) {
     doc.preferences.language = language;
     doc.preferences.theme = language === 'de' ? 'dark' : 'light';
     doc.goals = [target, { ...goal('Archived goal'), archivedAt: new Date().toISOString() }];
-    await page.request.post('/test/seed', { headers: { origin: base }, data: doc });
+    await page.request.post('/api/test/seed', {
+      headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+      data: doc,
+    });
     await page.reload();
     const complete =
       language === 'en' ? 'Complete Send the application' : 'Send the application abschließen';
@@ -236,7 +244,10 @@ test('finishing the final step highlights a goal on its completion day and undo 
       expectedVersion: 0,
     });
   }
-  await page.request.post('/test/seed', { headers: { origin: base }, data: doc });
+  await page.request.post('/api/test/seed', {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+    data: doc,
+  });
   await page.reload();
   await page.goto('/goals');
   const steppedCard = page

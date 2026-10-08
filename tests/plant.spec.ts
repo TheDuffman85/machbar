@@ -5,7 +5,9 @@ import { addDays, completionKey, type Bootstrap } from '../packages/shared/src/i
 const base = 'http://localhost:3100';
 
 async function onboard(page: Page) {
-  await page.request.post('/test/reset', { headers: { origin: base } });
+  await page.request.post('/api/test/reset', {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+  });
   await page.goto('/');
   await page.getByLabel('What should we call you?').fill('Alex');
   await page.getByRole('button', { name: 'Let’s begin' }).click();
@@ -48,7 +50,10 @@ test('earned level changes and undo update the plant automatically', async ({ pa
   }
   expect(
     (
-      await page.request.post('/test/seed', { headers: { origin: base }, data: snapshot.document })
+      await page.request.post('/api/test/seed', {
+        headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+        data: snapshot.document,
+      })
     ).ok(),
   ).toBe(true);
   await page.goto('/');

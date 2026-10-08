@@ -175,6 +175,10 @@ const en = {
   },
   selectUserHelp: 'Enter an existing user ID or scan its QR code to open your profile.',
   USER_CREATION_DISABLED: 'New profiles are disabled. Use an existing profile to continue.',
+  DOCUMENT_LIMIT: 'This profile has reached its size limit. Remove unused items before syncing.',
+  PROFILE_LIMIT: 'This server has reached its profile limit. Contact its administrator.',
+  STORAGE_LIMIT: 'This server has reached its storage limit. Contact its administrator.',
+  SERVER_BUSY: 'The server is busy. Synchronization will retry shortly.',
   sage: 'Sage',
   peach: 'Peach',
   lavender: 'Lavender',
@@ -675,6 +679,12 @@ const de: typeof en = {
     'Gib eine bestehende Benutzer-ID ein oder scanne ihren QR-Code, um dein Profil zu öffnen.',
   USER_CREATION_DISABLED:
     'Neue Profile sind deaktiviert. Nutze ein bestehendes Profil, um fortzufahren.',
+  DOCUMENT_LIMIT:
+    'Dieses Profil hat seine Größenbegrenzung erreicht. Entferne ungenutzte Einträge vor der Synchronisierung.',
+  PROFILE_LIMIT: 'Der Server hat seine Profilbegrenzung erreicht. Wende dich an den Administrator.',
+  STORAGE_LIMIT:
+    'Der Server hat seine Speicherbegrenzung erreicht. Wende dich an den Administrator.',
+  SERVER_BUSY: 'Der Server ist ausgelastet. Die Synchronisierung wird gleich erneut versucht.',
   sage: 'Salbei',
   peach: 'Pfirsich',
   lavender: 'Lavendel',

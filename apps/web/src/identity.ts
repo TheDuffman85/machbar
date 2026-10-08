@@ -18,12 +18,12 @@ function cookieUserId(): string | undefined {
   }
 }
 
-function saveCookieUserId(id: string): void {
+function clearLegacyCookie(): void {
   try {
-    // iOS copies cookies, but not localStorage, when installing a Home Screen app.
-    // Keep this host-only and readable so the new app can restore its local ID.
+    // Cookies cross port boundaries. Migrate old installations to origin-scoped
+    // localStorage, then remove the old host-wide profile access key.
     const secure = location.protocol === 'https:' ? '; Secure' : '';
-    document.cookie = `${localUserIdKey}=${id}; Path=/; Max-Age=31536000; SameSite=Strict${secure}`;
+    document.cookie = `${localUserIdKey}=; Path=/; Max-Age=0; SameSite=Strict${secure}`;
   } catch {
     // Cookie restrictions must not prevent normal localStorage-backed use.
   }
@@ -32,7 +32,7 @@ function saveCookieUserId(id: string): void {
 export function setLocalUserId(id: string): void {
   const saved = localUserIdSchema.parse(id);
   localStorage.setItem(localUserIdKey, saved);
-  saveCookieUserId(saved);
+  clearLegacyCookie();
 }
 
 export function getLocalUserId(): string {
@@ -40,7 +40,7 @@ export function getLocalUserId(): string {
   const saved = localUserIdSchema.safeParse(value);
   if (saved.success) {
     if (value !== saved.data) localStorage.setItem(localUserIdKey, saved.data);
-    saveCookieUserId(saved.data);
+    clearLegacyCookie();
     return saved.data;
   }
   const id = cookieUserId() ?? newId();

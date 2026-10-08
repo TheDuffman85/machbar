@@ -10,7 +10,9 @@ import {
 } from '../packages/shared/src/index.js';
 const base = 'http://localhost:3100';
 test.beforeEach(async ({ request }) => {
-  await request.post(`${base}/test/reset`, { headers: { origin: base } });
+  await request.post(`${base}/api/test/reset`, {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+  });
 });
 async function onboard(page: Page, name = 'Alex') {
   await page.goto('/');
@@ -73,7 +75,10 @@ test('Today shows every streak and logs missed habits on their original dates', 
     snapshot.document.habits.push({ ...habit, id: crypto.randomUUID(), title: `Habit ${i}` });
   expect(
     (
-      await page.request.post('/test/seed', { headers: { origin: base }, data: snapshot.document })
+      await page.request.post('/api/test/seed', {
+        headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+        data: snapshot.document,
+      })
     ).ok(),
   ).toBe(true);
   await page.reload();
@@ -161,8 +166,8 @@ for (const language of ['en', 'de'] as const) {
     snapshot.document.preferences.language = language;
     expect(
       (
-        await page.request.post('/test/seed', {
-          headers: { origin: base },
+        await page.request.post('/api/test/seed', {
+          headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
           data: snapshot.document,
         })
       ).ok(),
@@ -657,7 +662,12 @@ test('the day page hides archived habits, goals and steps on today and past days
   ];
   for (const item of archivedItems) item.archivedAt = new Date().toISOString();
   expect(
-    (await page.request.post('/test/seed', { headers: { origin: base }, data: doc })).ok(),
+    (
+      await page.request.post('/api/test/seed', {
+        headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+        data: doc,
+      })
+    ).ok(),
   ).toBe(true);
   await page.reload();
   for (const date of [today, yesterday]) {

@@ -10,25 +10,28 @@ const store = new JsonStore(directory);
 const config = {
   ...readConfig({
     APP_URL: 'http://localhost:3100',
+    DISABLE_USER_CREATION: 'false',
     // Browser tests share one IP; rate enforcement has dedicated API tests.
     RATE_LIMIT_MAX_PER_IP: '100000',
+    RATE_LIMIT_MAX_PER_USER: '100000',
+    RATE_LIMIT_MAX_NEW_USERS: '100000',
   }),
   dataDir: directory,
   webDir: resolve('apps/web/dist'),
 };
 const app = await buildServer({ config, store });
 // Test-only fixtures. These routes are never included in the production server.
-app.post('/test/config', async (request) => {
+app.post('/api/test/config', async (request) => {
   config.disableUserCreation = request.body.disableUserCreation === true;
   return { ok: true };
 });
-app.post('/test/reset', async () => {
+app.post('/api/test/reset', async () => {
   config.disableUserCreation = false;
   await rm(directory, { recursive: true, force: true });
   await mkdir(directory, { recursive: true });
   return { ok: true };
 });
-app.post('/test/seed', async (request) => {
+app.post('/api/test/seed', async (request) => {
   const document = userDocumentSchema.parse(request.body);
   await store.update(document.userId, (doc) => Object.assign(doc, document));
   return { ok: true };

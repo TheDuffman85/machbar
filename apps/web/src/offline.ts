@@ -6,6 +6,8 @@ import {
   bootstrapFor,
   operationKey,
   DomainError,
+  documentWithinLimits,
+  documentLimits,
   localUserIdSchema,
   mergeDocuments,
   mutateDocument,
@@ -343,7 +345,14 @@ function locally(change: (entry: Entry) => Entry, expectedUserId?: string): Prom
     checkIdentity(id);
     if (!entry) throw new ApiError('INVALID_IDENTITY', 400);
     try {
-      return change(entry);
+      const changed = change(entry);
+      if (
+        !documentWithinLimits(changed.snapshot.document) ||
+        new TextEncoder().encode(JSON.stringify(changed.snapshot.document)).byteLength >
+          documentLimits.maxBytes
+      )
+        throw new ApiError('DOCUMENT_LIMIT', 413);
+      return changed;
     } catch (error) {
       if (error instanceof DomainError) throw new ApiError(error.code, error.status);
       if (error instanceof Error && error.name === 'ZodError')

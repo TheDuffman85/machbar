@@ -2426,7 +2426,7 @@ function ChallengeForm({
   async function submit(e: FormEvent) {
     e.preventDefault();
     setLocalError('');
-    let path = '',
+    let path: string,
       body: unknown,
       method = 'POST';
     if (modal.kind === 'habit') {

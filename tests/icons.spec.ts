@@ -4,7 +4,9 @@ import { readSnapshot } from './helpers.js';
 
 const origin = 'http://localhost:3100';
 test.beforeEach(async ({ request }) => {
-  await request.post('/test/reset', { headers: { origin } });
+  await request.post('/api/test/reset', {
+    headers: { origin, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+  });
 });
 async function navigate(page: Page, name: string) {
   await page.locator('nav:visible').getByRole('link', { name, exact: true }).click();

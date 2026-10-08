@@ -6,7 +6,9 @@ import { localEntry, readSnapshot } from './helpers.js';
 const base = 'http://localhost:3100';
 const time = new Date('2026-10-06T10:00:00Z');
 test.beforeEach(async ({ page, request }) => {
-  await request.post('/test/reset', { headers: { origin: base } });
+  await request.post('/api/test/reset', {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+  });
   await page.clock.setFixedTime(time);
 });
 async function ready(page: Page, onboard = true) {
@@ -167,7 +169,10 @@ test('daily and selected-weekday habits retain their targets while a custom futu
   await dialog.getByLabel('Name', { exact: true }).fill('Tuesday stretch');
   await dialog.getByLabel('Repeat', { exact: true }).selectOption('weekdays');
   for (const day of ['Mon', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
-    await dialog.getByRole('button', { name: day, exact: true }).click();
+    await dialog
+      .locator('.weekday-buttons')
+      .getByRole('button', { name: day, exact: true })
+      .click();
   await dialog.getByRole('button', { name: 'Create', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await page.getByRole('button', { name: 'Add a habit', exact: true }).click();
@@ -241,7 +246,10 @@ for (const language of ['en', 'de'] as const) {
       id,
       new Date('2026-10-01T10:00:00Z'),
     );
-    await page.request.post('/test/seed', { headers: { origin: base }, data: doc });
+    await page.request.post('/api/test/seed', {
+      headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+      data: doc,
+    });
     await page.reload();
     await expect(
       page.getByRole('button', {
@@ -313,7 +321,10 @@ test('two offline devices checking different dates sync to one weekly win', asyn
     id,
     new Date('2026-10-01T10:00:00Z'),
   );
-  await page.request.post('/test/seed', { headers: { origin: base }, data: doc });
+  await page.request.post('/api/test/seed', {
+    headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
+    data: doc,
+  });
   await page.reload();
   await expect(
     page.getByRole('button', { name: 'Complete Shared week', exact: true }),

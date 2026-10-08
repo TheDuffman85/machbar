@@ -9,6 +9,7 @@ const image = 'machbar:docker-test';
 const directory = mkdtempSync(join(tmpdir(), 'machbar-docker-'));
 const container = `machbar-docker-${randomUUID()}`;
 const userId = randomUUID();
+const exposedUserId = randomUUID();
 const mount = ['--mount', `type=bind,src=${directory},dst=/app/data`];
 const security = [
   '--read-only',
@@ -31,6 +32,7 @@ const nodeCheck = `
   const fs = require('node:fs');
   assert.equal(process.getuid(), 1000);
   assert.equal(process.getgid(), 1000);
+  assert.equal(fs.statSync(process.env.DATA_DIR || '/app/data').mode & 0o777, 0o700);
   const status = fs.readFileSync('/proc/self/status', 'utf8');
   assert.match(status, /^CapEff:\\s+0+$/m);
 `;
@@ -59,6 +61,10 @@ try {
       const profile = '/app/data/${userId}.json';
       writeFileSync(profile, JSON.stringify(doc));
       chmodSync(profile, 0);
+      writeFileSync('/app/data/${exposedUserId}.json', JSON.stringify(createUser('${exposedUserId}')));
+      chmodSync('/app/data/${exposedUserId}.json', 0o666);
+      writeFileSync('/app/data/push-state.json', JSON.stringify({ bindings: [], dispatches: {} }));
+      chmodSync('/app/data/push-state.json', 0o644);
       writeFileSync('/app/data/untouched.txt', 'keep original ownership and permissions');
       chmodSync('/app/data/untouched.txt', 0o444);
       symlinkSync('untouched.txt', '/app/data/symlink.json');
@@ -85,7 +91,10 @@ try {
     '-e',
     `
       import assert from 'node:assert/strict';
-      import { readFileSync } from 'node:fs';
+      import { readFileSync, statSync } from 'node:fs';
+      assert.equal(statSync('/app/data').mode & 0o777, 0o700);
+      for (const file of ['${userId}.json', '${exposedUserId}.json', 'push-state.json'])
+        assert.equal(statSync('/app/data/' + file).mode & 0o777, 0o600);
       const status = readFileSync('/proc/1/status', 'utf8');
       assert.match(status, /^Uid:\\s+1000\\s+1000\\s+1000\\s+1000$/m);
       assert.match(status, /^Gid:\\s+1000\\s+1000\\s+1000\\s+1000$/m);
@@ -119,6 +128,24 @@ try {
       const stored = JSON.parse(readFileSync('/app/data/${userId}.json', 'utf8'));
       assert.equal(stored.preferences.name, 'Synced profile');
       assert.equal(stored.revision, document.revision + 1);
+      const outsider = crypto.randomUUID();
+      const denied = await fetch('http://localhost:3000/api/bootstrap', {
+        headers: { 'X-Machbar-User': outsider },
+      });
+      assert.equal(denied.status, 403);
+      assert.equal((await denied.json()).code, 'USER_CREATION_DISABLED');
+      const blocked = await fetch('http://localhost:3000/api/sync', {
+        method: 'PUT',
+        headers: {
+          Origin: 'http://localhost:3000',
+          'Content-Type': 'application/json',
+          'X-Machbar-User': outsider,
+          'If-Match': '0',
+        },
+        body: JSON.stringify({ ...document, userId: outsider, revision: 0 }),
+      });
+      assert.equal(blocked.status, 403);
+      assert.equal((await blocked.json()).code, 'USER_CREATION_DISABLED');
     `,
   ]);
   docker([
@@ -130,16 +157,89 @@ try {
     '-e',
     `
     const assert = require('node:assert/strict');
-    const { statSync, readFileSync } = require('node:fs');
+    const { statSync, readFileSync, lstatSync, readlinkSync } = require('node:fs');
     assert.equal(statSync('/app/data').uid, 1000);
     assert.equal(statSync('/app/data/${userId}.json').uid, 1000);
     const untouched = '/app/data/untouched.txt';
     assert.equal(statSync(untouched).uid, 0);
     assert.equal(statSync(untouched).mode & 0o777, 0o444);
     assert.equal(readFileSync(untouched, 'utf8'), 'keep original ownership and permissions');
+    assert.equal(lstatSync('/app/data/symlink.json').isSymbolicLink(), true);
+    assert.equal(readlinkSync('/app/data/symlink.json'), 'untouched.txt');
   `,
   ]);
   docker(['stop', '-t', '5', container]);
+
+  // Direct non-root startup also removes permissive modes from owned data.
+  docker([
+    'run',
+    '--rm',
+    '--user',
+    '1000:1000',
+    '--entrypoint',
+    'node',
+    ...security,
+    ...mount,
+    image,
+    '-e',
+    `
+      const fs = require('node:fs');
+      fs.chmodSync('/app/data', 0o777);
+      fs.chmodSync('/app/data/${exposedUserId}.json', 0o666);
+      fs.chmodSync('/app/data/push-state.json', 0o644);
+    `,
+  ]);
+  docker([
+    'run',
+    '--rm',
+    '--user',
+    '1000:1000',
+    ...security,
+    ...mount,
+    image,
+    'node',
+    '-e',
+    nodeCheck +
+      `
+      for (const file of ['${exposedUserId}.json', 'push-state.json'])
+        assert.equal(fs.statSync('/app/data/' + file).mode & 0o777, 0o600);
+    `,
+  ]);
+
+  // Provision locally while the server is stopped; public registration stays closed.
+  const provisionedId = docker([
+    'run',
+    '--rm',
+    '--user',
+    '1000:1000',
+    ...security,
+    ...mount,
+    image,
+    'node',
+    'api/dist/provision-user.js',
+    'Provisioned profile',
+  ]).trim();
+  assert.match(provisionedId, /^[a-f0-9-]{36}$/);
+  docker([
+    'run',
+    '--rm',
+    '--user',
+    '1000:1000',
+    ...security,
+    ...mount,
+    image,
+    'node',
+    '-e',
+    `
+      const assert = require('node:assert/strict');
+      const fs = require('node:fs');
+      const path = '/app/data/${provisionedId}.json';
+      const profile = JSON.parse(fs.readFileSync(path, 'utf8'));
+      assert.equal(profile.userId, '${provisionedId}');
+      assert.equal(profile.preferences.name, 'Provisioned profile');
+      assert.equal(fs.statSync(path).mode & 0o777, 0o600);
+    `,
+  ]);
 
   // A prepared mount supports a non-root container with all capabilities dropped.
   docker([
@@ -161,7 +261,7 @@ try {
     ...security,
     ...capabilities,
     '--tmpfs',
-    '/custom-data:mode=700',
+    '/custom-data:mode=777',
     '-e',
     'DATA_DIR=/custom-data',
     image,
@@ -184,7 +284,7 @@ try {
     (error) => error.status !== 0 && /cannot prepare DATA_DIR/.test(error.stderr),
   );
   console.log(
-    'Docker checks passed: permission repair, persisted sync, non-root runtime, custom DATA_DIR, symlink preservation, and unwritable-mount errors.',
+    'Docker checks passed: closed registration, local provisioning, permission repair, persisted sync, non-root runtime, custom DATA_DIR, symlink preservation, and unwritable-mount errors.',
   );
 } finally {
   if (containerCreated) docker(['rm', '-f', container]);

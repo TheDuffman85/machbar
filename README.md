@@ -10,12 +10,14 @@ Requirements: Docker and Docker Compose. The image uses Node.js 24 LTS.
 
 ```bash
 cp .env.example .env
-docker compose up -d --build
+docker compose build
+docker compose run --rm --no-deps machbar node api/dist/provision-user.js
+docker compose up -d
 ```
 
-Open **http://localhost:3000**. Configure your name, language, timezone, and avatar, then add your first habit or goal. Data lives in the persistent `machbar_data` volume. The entrypoint starts as root to prepare the data directory and existing JSON profile files, then replaces itself with the app running as the unprivileged `node` user (UID/GID **1000:1000**). Compose keeps the application filesystem read-only and exposes `/health` for health checks.
+The provisioning command prints a private profile UUID. Open **http://localhost:3000**, enter that UUID on the profile selection screen, then configure your name, language, timezone, and avatar and add your first habit or goal. Public profile creation is disabled by default. Data lives in the persistent `machbar_data` volume. The entrypoint starts as root to prepare the data directory and existing JSON profile files, then replaces itself with the app running as the unprivileged `node` user (UID/GID **1000:1000**). Compose keeps the application filesystem read-only and exposes `/health` for health checks.
 
-To store data in a host directory, replace the volume mapping with a bind mount, for example `/srv/data/machbar:/app/data`. On startup the image automatically repairs ownership and owner access for the mounted directory and its regular `*.json` files. This also fixes `EACCES: permission denied` errors during sync when Docker created the host directory as root. Repairs preserve existing JSON contents and skip symlinked profile files. Absolute `DATA_DIR` overrides are supported. A failed repair or an unwritable data directory stops startup with an explanatory error.
+To store data in a host directory, replace the volume mapping with a bind mount, for example `/srv/data/machbar:/app/data`. On startup the image automatically repairs ownership and enforces owner-only permissions: **0700** on the mounted directory and **0600** on its regular `*.json` files. This removes existing group/world access and also fixes `EACCES: permission denied` errors during sync when Docker created the host directory as root. Repairs preserve existing JSON contents and skip symlinked profile files. Direct non-root startup enforces the same modes on already-owned data. Absolute `DATA_DIR` overrides are supported. A failed repair or an unwritable data directory stops startup with an explanatory error.
 
 The Compose capabilities `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, and `SETGID` allow the startup repair and user switch; the app runs without effective capabilities after the switch. If you require a non-root container from its first instruction, pre-create the data directory with ownership **1000:1000**, give its owner directory read/write/search access and existing JSON files read/write access, set `user: '1000:1000'`, and remove `cap_add` while keeping `cap_drop: [ALL]`. This skips automatic ownership repair and still checks that the directory is writable. Non-root process execution is separate from [Docker's rootless daemon mode](https://docs.docker.com/engine/security/rootless/): with a rootless daemon or user namespaces, bind-mount ownership must use the daemon's mapped IDs.
 
@@ -59,11 +61,11 @@ Disabling notifications immediately clears this device’s local opt-in, unsubsc
 
 ## Browser profiles
 
-There is no login. Each browser receives a unique UUID stored in local storage (`machbar-user-id`), with its profile saved in a separate `<userId>.json` file on the server. Open **Switch User** from the avatar menu to see and copy your ID or QR code. On another device, enter that existing ID, scan its QR code with the camera, or upload a QR image, then choose **Switch profile**. Camera scanning requires HTTPS or localhost; manual entry and QR image upload also work on LAN HTTP. Sync or discard pending changes before switching. Your previous profile stays saved.
+There is no login. Administrators provision profiles locally and give each user their private UUID. Enter that UUID on the profile selection screen; it is stored in local storage (`machbar-user-id`), with the profile saved in a separate `<userId>.json` file on the server. Open **Switch User** from the avatar menu to see and copy your ID or QR code. On another device, enter that existing ID, scan its QR code with the camera, or upload a QR image, then choose **Switch profile**. Camera scanning requires HTTPS or localhost; manual entry and QR image upload also work on LAN HTTP. Sync or discard pending changes before switching. Your previous profile stays saved. When administrators explicitly enable public registration, browsers can create profiles using locally generated UUIDs.
 
-The ID is also backed up in a host-only cookie (`SameSite=Strict`, `Secure` on HTTPS). On iOS 17.2 and later, installing a Home Screen app copies cookies but not local storage, so the PWA restores the same ID from that cookie on first launch and loads its synced profile. Existing local storage takes precedence, and switching profiles updates both copies. Sync pending changes before installing. For a PWA installed before this backup was available, use **Switch User** inside the PWA to restore the ID shown in Safari.
+Profile IDs stay in origin-scoped local storage; they are never backed up in cookies, which would expose the access key to other services sharing the hostname on different ports. When upgrading an older installation, an existing legacy cookie is restored only if local storage has no valid ID, then deleted. Existing local storage takes precedence. Sync pending changes and copy your ID before installing a Home Screen app. If the installed app has separate browser storage (including iOS), use **Switch User** inside the app to restore the ID shown in your browser.
 
-Keep your ID or QR code somewhere safe: clearing browser storage creates a new ID, and anyone who knows an ID can access and edit that profile. The ID is an access key, not a login.
+Keep your ID or QR code somewhere safe: clearing browser storage loses the saved ID, so enter it again to restore access. Anyone who knows an ID can access and edit that profile. The ID is an access key, not a login.
 
 The data directory is never exposed by the web server.
 
@@ -74,10 +76,13 @@ Requirements: Node.js **24.x** and PNPM **11.17.0** (pinned through `packageMana
 ```bash
 corepack enable
 pnpm install
+pnpm --filter @machbar/shared build
+pnpm --filter @machbar/api build
+node apps/api/dist/provision-user.js
 pnpm dev
 ```
 
-Open **http://localhost:5173**, or **http://<server-ip>:5173** from another device. Vite binds to all network interfaces and proxies API requests to port 3000. Shared TypeScript builds in watch mode. The API loads the root `.env` if present and honors `APP_URL`. For a custom development hostname, set `APP_URL` to the browser-facing origin, including port 5173; Vite allows that hostname automatically. Restart development processes after changing environment variables. Remote PWA installation and offline support require HTTPS; ordinary checkoffs work over LAN HTTP.
+Open **http://localhost:5173**, or **http://<server-ip>:5173** from another device, and enter the provisioned UUID. Vite binds to all network interfaces and proxies API requests to port 3000. Shared TypeScript builds in watch mode. The API loads the root `.env` if present and honors `APP_URL`. For a custom development hostname, set `APP_URL` to the browser-facing origin, including port 5173; Vite allows that hostname automatically. Restart development processes after changing environment variables. Remote PWA installation and offline support require HTTPS; ordinary checkoffs work over LAN HTTP.
 
 For a production build without Docker:
 
@@ -86,9 +91,23 @@ pnpm build
 NODE_ENV=production pnpm start
 ```
 
-`APP_URL` defaults to `http://localhost:3000`. Optional server variables: `PORT` (3000), `HOST` (0.0.0.0), `DATA_DIR` (`./data`), and `WEB_DIR` (`./apps/web/dist`). Set `DISABLE_USER_CREATION=true` to prevent new profiles from being created. Visitors must enter an existing saved user ID or scan its QR code; existing profiles can still edit and sync their data. Both bootstrap and sync enforce this restriction on the server. The default is `false`. Save at least one profile and keep its user ID before enabling this mode, then restart the server (or recreate the Docker Compose container).
+`APP_URL` defaults to `http://localhost:3000`. Optional server variables: `PORT` (3000), `HOST` (0.0.0.0), `DATA_DIR` (`./data`), and `WEB_DIR` (`./apps/web/dist`). `DISABLE_USER_CREATION` defaults to `true`: visitors must enter an existing saved user ID or scan its QR code; existing profiles can still edit and sync their data. Both bootstrap and sync enforce this restriction on the server, even when the data directory is empty.
+
+To provision another profile, stop the server so only one process owns its data directory, run the local provisioning command, then restart it:
+
+```bash
+docker compose stop machbar
+docker compose run --rm --no-deps machbar node api/dist/provision-user.js 'Alice'
+docker compose up -d
+```
+
+For a local installation, stop the server and run `node apps/api/dist/provision-user.js 'Alice'` after building. The name is optional. Provisioning uses the configured data directory and persistent quotas, writes a private profile file, and prints its UUID; keep it private. There is no HTTP provisioning endpoint.
+
+**Upgrade existing deployments:** if your `.env` explicitly contains `DISABLE_USER_CREATION=false`, change it to `true` and restart or recreate the server to close public registration. Existing profiles and saved IDs continue to work. Setting `DISABLE_USER_CREATION=false` deliberately permits anyone with network access to create profiles and consume the shared profile/storage quotas; rate limits only slow this down. Use public registration only on a trusted network or behind an access-controlled proxy.
 
 Relative data/web paths resolve from the repository root so development and production share the same local data directory.
+
+Storage is bounded by default: **100 saved profiles**, **256 MiB** of regular files in `DATA_DIR` (including push state), and a **64 MiB** free-space reserve. Set `MAX_PROFILES`, `MAX_STORAGE_BYTES`, and `STORAGE_RESERVE_BYTES` to positive integers to adjust these limits. Quotas are checked against files on disk and survive restarts; atomic replacements also require space for the temporary file. Existing profiles remain readable when a quota is lowered, and writes that reduce an over-quota directory's usage are allowed if the free-space reserve is satisfied. Limits never delete existing files. New profiles stop saving at the profile quota; existing profiles can still sync within the storage budget. For a closed deployment, keep `DISABLE_USER_CREATION=true` after provisioning your profiles.
 
 Settings shows the installed frontend version and build date. Every Vite build (including Docker builds) appends a UTC timestamp with millisecond precision to the root package version, for example `1.0.0+20261006120000123`. The build date uses the selected language and timezone. Both values are embedded in the frontend, so they stay accurate offline and change when a new build is installed. Development generates them when Vite starts.
 
@@ -135,18 +154,22 @@ Notification routes also require the identity header and same-origin writes:
 | ---------------------------------------- | --------------------------------------------------------- |
 | `GET /api/notifications/config`          | `{ available, publicKey }`; never exposes the private key |
 | `PUT /api/notifications/subscription`    | Register `{ subscription }`; returns `{ bindingId }`      |
-| `DELETE /api/notifications/subscription` | Remove this profile’s `{ bindingId }` idempotently        |
+| `DELETE /api/notifications/subscription` | Remove a saved profile’s `{ bindingId }` idempotently     |
 | `POST /api/notifications/test`           | Send a test to this profile’s `{ bindingId }`             |
 
 Bootstrap, profile switching, and sync return `{ document, dailyHistoryDays }`. The client calculates today, XP, levels, streaks, achievements, goal progress, gift availability, and plant growth.
 
 To switch profiles, send the **target** profile's ID in both `X-Machbar-User` and `{ userId }`. Mismatches return `ACCOUNT_CHANGED` without loading or modifying either profile. Possession of a profile's UUID grants access to that profile; keep IDs and QR codes private and use HTTPS for public deployments.
 
-Every `/api/*` request, including failed requests and unknown API paths, counts toward rate limits before identity checks and JSON parsing. Defaults per **60-second fixed window** are **300 requests per IP**, **120 per user ID** (across devices), and **20 per IP without a valid user ID**. Missing and malformed IDs share the anonymous allowance. The IP limit also applies to valid IDs, so rotating IDs cannot bypass it. Exceeded limits return 429 with `{ "code": "RATE_LIMITED" }` and a `Retry-After` header in seconds; `/health` and static assets remain available.
+Every `/api/*` request, including requests that fail identity checks and unknown API paths, is rate-limited before identity checks and JSON parsing. Admission consumes the IP and user/anonymous counters together; requests already rejected by a rate limit do not consume another allowance. Defaults per **60-second fixed window** are **300 requests per IP**, **120 per user ID** (across devices), and **20 per IP without a valid user ID**. Missing and malformed IDs share the anonymous allowance. The IP limit also applies to valid IDs, so rotating IDs cannot bypass it. Exceeded limits return 429 with `{ "code": "RATE_LIMITED" }` and a `Retry-After` header in seconds; `/health` and static assets remain available.
 
-Configure `RATE_LIMIT_WINDOW_SECONDS` (1–86400), `RATE_LIMIT_MAX_PER_IP`, `RATE_LIMIT_MAX_PER_USER`, and `RATE_LIMIT_MAX_ANONYMOUS` through `.env` or the server environment, then restart the server or recreate the Compose container. Request limits must be positive integers. Counters live in memory, reset on restart or window expiry, and track at most 10,000 keys; new keys are denied until expiry if that capacity is reached. Run one application instance. IP limits use the connection address and ignore forwarding headers. Behind a reverse proxy, clients share the proxy's IP allowance; size that allowance for your deployment and enforce individual client IP limits at the proxy.
+Configure `RATE_LIMIT_WINDOW_SECONDS` (1–86400), `RATE_LIMIT_MAX_PER_IP`, `RATE_LIMIT_MAX_PER_USER`, and `RATE_LIMIT_MAX_ANONYMOUS` through `.env` or the server environment, then restart the server or recreate the Compose container. Request limits must be positive integers. Counters live in memory, reset on restart or window expiry, and track at most 10,000 keys; new keys are denied until expiry if that capacity is reached. Run one application instance. By default, IP limits use the connection address and ignore forwarding headers. Behind a reverse proxy, set `TRUSTED_PROXIES` to a comma-separated allowlist of the proxy's actual socket IP addresses or CIDRs (IPv4/IPv6), for example `192.0.2.10,2001:db8:1234::/64`. Machbar then resolves each client address through those trusted hops; direct clients cannot override their address with forwarding headers. Hostnames, blanket trust, and `/0` ranges are rejected. Trust only controlled proxies, configure them to replace incoming `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto` headers, and restrict direct access to the application port. For Docker, use the source address observed inside the container, which may differ from the proxy's host address. Keep individual client IP limits at the proxy as an additional safeguard. See [Fastify's trusted-proxy documentation](https://fastify.dev/docs/latest/Reference/Server/#trustproxy).
+
+Initial sync requests for unsaved profiles additionally share **10 attempts per window** globally, across all IP addresses and IDs. Set `RATE_LIMIT_MAX_NEW_USERS` to change this allowance. Saved profiles are exempt from this creation allowance. Missing/invalid sync revisions and disabled profile creation are rejected before reading JSON. Non-API paths accept only GET and HEAD; other methods return 404 before their bodies are read or parsed. The server limits connections to **128**, simultaneous API requests to **16**, body receipt to **30 seconds**, connection inactivity to **15 seconds**, and idle keep-alive to **5 seconds**. Busy requests return `SERVER_BUSY` (503). API admission slots remain held after a client disconnect or socket timeout until any in-progress handler or sync admission storage lookup settles. Aborted requests with no backend work release their slots immediately; timed-out sockets are closed. A reverse proxy should enforce its own client IP, connection, and body-read limits; restrict direct access to the application port when relying on those controls.
 
 Sync sends `If-Match: <server revision>`, `X-Machbar-User: <userId>`, a same-origin `Origin`, and the complete document as JSON. Its `userId` and `revision` must match the identity header and expected revision. The server saves only if its current revision matches, then increments the revision. On `DOCUMENT_CONFLICT`, the client fetches the latest document, merges again, and retries. Failed or interrupted requests leave local pending changes intact. An acknowledgment clears only the captured batch; changes made during a request remain pending and are rebased onto the saved document. Sync accepts documents up to 8 MiB.
+
+Document complexity is bounded before detailed validation: **500 habits**, **500 goals**, **1,000 gifts**, **500 steps per goal / 5,000 total steps**, **256 schedules per habit / 4,096 total schedules**, **20,000 completions / 20,000 operation receipts**, and **32 distinct timezones**. Receipt fingerprints are limited to **2,048 characters**, keys to **160**, and archive/claim/update timestamps to **40**. Oversized writes return `DOCUMENT_LIMIT` (413); profile and storage quota failures return `PROFILE_LIMIT` or `STORAGE_LIMIT` (507). Existing legacy documents remain readable so they can be reduced to fit; new local edits also check these limits before being saved. Reminder calculations are shared across a profile's devices, and dispatch ticks rotate between devices, with separate continuation cursors and a per-device allowance of 10 sends / 50 inspected reminders. The entire tick is limited to 50 sends / 500 inspected items / one second of work (an in-flight send may finish after that budget). After a slow send uses up the time budget, the next tick starts with the next device. Durable receipts prevent duplicate delivery when revisiting a backlog or restarting the server. Push state has an additional 32 MiB cap and at most 100,000 outstanding dispatch receipts.
 
 The stored document remains schema version 1. It includes task IDs, schedule history, archive/claim timestamps, completion records and operation receipts. Existing completion identities remain habit/date or goal-step ID. Period habits use habit/period-start identities and optional `periodStart` metadata while retaining the actual completion date and timezone; progress is derived from completed records, so retries do not award duplicate XP.
 
@@ -190,7 +213,7 @@ curl http://localhost:3000/health
 
 Browser tests exercise the production build on an isolated temporary data directory at port 3100. They cover desktop/mobile layouts, accessibility, all offline feature mutations, offline reload and synchronization, automatic conflicts, API outages, interrupted requests, cache upgrades, multiple tabs, and account switching. The `iphone` project uses WebKit with iPhone 17 Pro Max emulation to check mobile form sizing and menu navigation. An existing Chromium executable can be selected through `PLAYWRIGHT_CHROMIUM_EXECUTABLE`. Production does not contain the test reset or seed routes.
 
-Docker tests build an isolated image and verify permission repair with existing root-owned profiles, a real API sync, the application's UID/GID and lack of effective capabilities, direct non-root startup, custom data directories, symlink preservation, and unwritable-mount errors. They require a local Linux Docker daemon without user namespace remapping and do not publish ports or use your application data.
+Docker tests build an isolated image and verify closed public registration, local profile provisioning, permission repair with existing root-owned profiles, a real API sync, the application's UID/GID and lack of effective capabilities, direct non-root startup, custom data directories, symlink preservation, and unwritable-mount errors. They require a local Linux Docker daemon without user namespace remapping and do not publish ports or use your application data.
 
 ## Challenge icons
 
