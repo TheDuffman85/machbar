@@ -1,0 +1,111 @@
+# Deployment reference
+
+[← README](../README.md)
+
+For installation steps and environment-variable defaults, see the [README](../README.md#installation). This reference covers storage, access, reminders, and maintenance in more detail.
+
+## Container startup and storage
+
+Open **http://localhost:3000**, create a profile, then configure your name, language, timezone, and avatar and add your first habit or goal. Public profile creation is enabled by default; set `DISABLE_USER_CREATION=true` to require locally provisioned profiles. Data lives in the persistent `machbar_data` volume. The entrypoint starts as root to prepare the data directory and existing JSON profile files, then replaces itself with the app running as the unprivileged `node` user (UID/GID **1000:1000**). Compose keeps the application filesystem read-only and exposes `/health` for health checks.
+
+To store data in a host directory, replace the volume mapping with a bind mount, for example `/srv/data/machbar:/app/data`. On startup the image automatically repairs ownership and enforces owner-only permissions: **0700** on the mounted directory and **0600** on its regular `*.json` files. This removes existing group/world access and also fixes `EACCES: permission denied` errors during sync when Docker created the host directory as root. Repairs preserve existing JSON contents and skip symlinked profile files. Direct non-root startup enforces the same modes on already-owned data. Absolute `DATA_DIR` overrides are supported. A failed repair or an unwritable data directory stops startup with an explanatory error.
+
+The Compose capabilities `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, and `SETGID` allow the startup repair and user switch; the app runs without effective capabilities after the switch. If you require a non-root container from its first instruction, pre-create the data directory with ownership **1000:1000**, give its owner directory read/write/search access and existing JSON files read/write access, set `user: '1000:1000'`, and remove `cap_add` while keeping `cap_drop: [ALL]`. This skips automatic ownership repair and still checks that the directory is writable. Non-root process execution is separate from [Docker's rootless daemon mode](https://docs.docker.com/engine/security/rootless/): with a rootless daemon or user namespaces, bind-mount ownership must use the daemon's mapped IDs.
+
+By default the port binds to all network interfaces. Other devices can open `http://<server-ip>:3000`; the app accepts same-origin writes through that address. Set `BIND_ADDRESS=127.0.0.1` to limit access to the host. For a public deployment, place an HTTPS reverse proxy in front of the app and set `APP_URL=https://machbar.example.com`. Service workers require HTTPS, except on localhost.
+
+Run **one application instance** against the data volume. JSON writes are serialized per user and saved through flush and atomic rename; this is not a shared-filesystem cluster or a horizontally scalable service.
+
+## Optional habit notifications
+
+In **Settings → Notifications**, enable notifications separately in each browser or installed PWA where you want reminders. Then edit a habit, turn on **Remind me about this habit**, and choose its time. Existing habits have reminders disabled. Times follow the habit’s active schedule timezone, including deferred timezone changes. Daily and weekday habits remind only on scheduled days; weekly, monthly, and multi-day habits remind daily while the current period remains unfinished. Archived and completed habits do not produce new reminders. The same profile can receive reminders on multiple opted-in devices (up to 32).
+
+Background delivery uses standard Web Push. Android and compatible desktop browsers support it; on **iOS/iPadOS 16.4 or later**, add Machbar to the Home Screen and open the installed app to enable notifications. Ordinary iOS browser tabs cannot receive push notifications. HTTPS is required outside localhost. Delivery is best effort and may be delayed or restricted by the browser, operating system, battery settings, or Focus mode; it is not an exact alarm.
+
+The server and device need internet access for delivery. Fully offline scheduled background reminders are not supported by this PWA. Reminder edits and checkoffs still save offline and apply to the server after synchronization. An offline completion, reminder change, or archive cannot reliably cancel an already queued message. Messages expire at the next local midnight; reconnecting earlier can deliver a delayed reminder. Server restarts catch up on due reminders from the current local day, without replaying earlier days. Notifications display the habit title and open Today when clicked.
+
+To enable delivery on your self-hosted server, generate a matching VAPID key pair **once**:
+
+```bash
+pnpm --filter @machbar/api exec web-push generate-vapid-keys --json
+```
+
+For a Docker-only installation, generate keys using the built image:
+
+```bash
+docker compose run --rm --no-deps machbar node -e 'console.log(JSON.stringify(require("./api/node_modules/web-push").generateVAPIDKeys()))'
+```
+
+Copy the output into `.env`, together with a real contact address:
+
+```dotenv
+VAPID_PUBLIC_KEY=<publicKey>
+VAPID_PRIVATE_KEY=<privateKey>
+VAPID_SUBJECT=mailto:you@example.com
+```
+
+Restart the server or recreate the Compose container. Keep the key pair stable and the private key private; rotating keys requires re-enabling notifications on each device. All three values absent/empty disables server notification support. Incomplete configuration, invalid or mismatched keys, and invalid contact addresses fail startup. No Firebase account or Apple developer membership is needed. The server requires outbound HTTPS to browser push services, including Google, Mozilla, and Apple (`*.push.apple.com`); the site and API remain self-hosted.
+
+Subscriptions and dispatch records are saved separately in `DATA_DIR/push-state.json` with owner-only permissions. Include this file in stopped-server backups, alongside the profile JSON files, and preserve the VAPID configuration. Successful dispatches and ambiguous delivery attempts are not replayed after restart; DNS/connection failures before delivery and explicit 429/5xx push-service failures retry with backoff until expiry, and 404/410 removes expired subscriptions. A crash between claiming a dispatch and sending it can miss that reminder. The Settings test button verifies the delivery path and allows one test per minute per device.
+
+Disabling notifications immediately clears this device’s local opt-in, unsubscribes from browser push, and closes displayed reminders. If server cleanup is offline, it retries after reconnection. Switching profiles removes the old device binding; the new profile requires explicit opt-in. Browser permission itself remains under browser/device settings. After upgrading Machbar, install the offered update and reopen old tabs before enabling or editing reminders; no profile reset is required.
+
+## Browser profiles
+
+There is no login. Browsers can create profiles using locally generated UUIDs by default. When `DISABLE_USER_CREATION=true`, administrators provision profiles locally and give each user their private UUID to enter on the profile selection screen. The UUID is stored in local storage (`machbar-user-id`), with the profile saved in a separate `<userId>.json` file on the server. Open **Switch User** from the avatar menu to see and copy your ID or QR code. On another device, enter that existing ID, scan its QR code with the camera, or upload a QR image, then choose **Switch profile**. Camera scanning requires HTTPS or localhost; manual entry and QR image upload also work on LAN HTTP. Sync or discard pending changes before switching. Your previous profile stays saved.
+
+Profile IDs stay in origin-scoped local storage; they are never backed up in cookies, which would expose the access key to other services sharing the hostname on different ports. When upgrading an older installation, an existing legacy cookie is restored only if local storage has no valid ID, then deleted. Existing local storage takes precedence. Sync pending changes and copy your ID before installing a Home Screen app. If the installed app has separate browser storage (including iOS), use **Switch User** inside the app to restore the ID shown in your browser.
+
+Keep your ID or QR code somewhere safe: clearing browser storage loses the saved ID, so enter it again to restore access. Anyone who knows an ID can access and edit that profile. The ID is an access key, not a login.
+
+The data directory is never exposed by the web server.
+
+## Backup and restore
+
+Stop the app before copying JSON files for a consistent backup. Use a fresh backup directory for each snapshot:
+
+```bash
+docker compose stop machbar
+mkdir -p backups
+docker compose cp machbar:/app/data ./backups/machbar-data
+docker compose start machbar
+```
+
+Keep backups private: they contain profile and task history. Save deployment configuration separately. To restore, stop the app, copy the backed-up JSON files into the volume, and preserve ownership for UID/GID **1000** and mode **0600**. One way to perform maintenance is a temporary Compose container:
+
+```bash
+docker compose run --rm --no-deps --user root --entrypoint sh \
+  -v "$PWD/backups/machbar-data:/backup:ro" machbar \
+  -c 'cp /backup/*.json /app/data/ && chown 1000:1000 /app/data/*.json && chmod 600 /app/data/*.json'
+docker compose start machbar
+```
+
+For standalone Docker, use `docker stop machbar`, `docker cp machbar:/app/data ./backups/machbar-data`, and `docker start machbar` for the backup. To restore into the named volume from the README's Docker example, keep the app stopped and run:
+
+```bash
+docker run --rm --user root --entrypoint sh \
+  -v machbar_data:/app/data \
+  -v "$PWD/backups/machbar-data:/backup:ro" machbar:local \
+  -c 'cp /backup/*.json /app/data/ && chown 1000:1000 /app/data/*.json && chmod 600 /app/data/*.json'
+docker start machbar
+```
+
+This overwrites matching user files; restore into a fresh volume if you need an exact snapshot. Corrupt or unsupported documents produce `DATA_CORRUPT` rather than being replaced with blank data. Schema version 1 is the initial format; future changes require explicit migrations.
+
+## Profile provisioning and storage quotas
+
+To provision another profile, stop the server so only one process owns its data directory, run the local provisioning command, then restart it:
+
+```bash
+docker compose stop machbar
+docker compose run --rm --no-deps machbar node api/dist/provision-user.js 'Alice'
+docker compose up -d
+```
+
+For a local installation, stop the server and run `node apps/api/dist/provision-user.js 'Alice'` after building. The name is optional. Provisioning uses the configured data directory and persistent quotas, writes a private profile file, and prints its UUID; keep it private. There is no HTTP provisioning endpoint.
+
+**Existing deployments:** explicit `.env` values continue to apply. To enable public registration, change `DISABLE_USER_CREATION=true` to `false` and restart or recreate the server. To close public registration, set `DISABLE_USER_CREATION=true`; existing profiles and saved IDs continue to work. Public registration permits anyone with network access to create profiles and consume the shared profile/storage quotas; rate limits only slow this down. Use public registration only on a trusted network or behind an access-controlled proxy.
+
+Relative data/web paths resolve from the repository root so development and production share the same local data directory.
+
+Storage is bounded by default: **100 saved profiles**, **256 MiB** of regular files in `DATA_DIR` (including push state), and a **64 MiB** free-space reserve. Set `MAX_PROFILES`, `MAX_STORAGE_BYTES`, and `STORAGE_RESERVE_BYTES` to positive integers to adjust these limits. Quotas are checked against files on disk and survive restarts; atomic replacements also require space for the temporary file. Existing profiles remain readable when a quota is lowered, and writes that reduce an over-quota directory's usage are allowed if the free-space reserve is satisfied. Limits never delete existing files. New profiles stop saving at the profile quota; existing profiles can still sync within the storage budget. For a closed deployment, keep `DISABLE_USER_CREATION=true` after provisioning your profiles.
