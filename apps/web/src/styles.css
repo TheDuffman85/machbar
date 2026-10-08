@@ -1804,6 +1804,20 @@ legend {
   gap: 10px;
   padding-top: 7px;
 }
+.settings-panel .form-actions {
+  flex-wrap: wrap;
+}
+.challenge-form .checkbox-label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+.checkbox-label input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--green);
+}
 .form-error {
   color: #a36750;
   font-size: 12px;

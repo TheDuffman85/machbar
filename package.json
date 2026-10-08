@@ -8,6 +8,7 @@
     "node": ">=24 <25"
   },
   "scripts": {
+    "generate:icons": "node scripts/generate-pwa-icons.mjs",
     "dev": "pnpm --filter @machbar/shared build && concurrently -k -n shared,api,web 'pnpm --filter @machbar/shared dev' 'pnpm --filter @machbar/api dev' 'pnpm --filter @machbar/web dev'",
     "build": "pnpm --filter @machbar/shared build && pnpm --filter @machbar/api build && pnpm --filter @machbar/web build",
     "start": "node apps/api/dist/index.js",

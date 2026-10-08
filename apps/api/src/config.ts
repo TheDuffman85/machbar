@@ -1,7 +1,9 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createECDH } from 'node:crypto';
 const projectRoot = fileURLToPath(new URL('../../../', import.meta.url));
 export type Config = {
+  vapid: { publicKey: string; privateKey: string; subject: string } | null;
   appUrl: string;
   port: number;
   host: string;
@@ -15,6 +17,35 @@ export type Config = {
   rateLimitMaxAnonymous: number;
 };
 export function readConfig(env = process.env): Config {
+  const vapidValues = [env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY, env.VAPID_SUBJECT];
+  let vapid: Config['vapid'] = null;
+  if (vapidValues.some((value) => value !== undefined && value !== '')) {
+    try {
+      const publicKey = env.VAPID_PUBLIC_KEY ?? '';
+      const privateKey = env.VAPID_PRIVATE_KEY ?? '';
+      const subject = env.VAPID_SUBJECT ?? '';
+      if (!/^[A-Za-z0-9_-]{87}$/.test(publicKey) || !/^[A-Za-z0-9_-]{43}$/.test(privateKey))
+        throw new Error();
+      const key = createECDH('prime256v1');
+      key.setPrivateKey(Buffer.from(privateKey, 'base64url'));
+      if (key.getPublicKey().toString('base64url') !== publicKey) throw new Error();
+      const contact = new URL(subject);
+      if (
+        !['https:', 'mailto:'].includes(contact.protocol) ||
+        contact.username ||
+        contact.password ||
+        (contact.protocol === 'mailto:'
+          ? !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.pathname)
+          : !contact.hostname.includes('.') || contact.hostname.endsWith('.localhost'))
+      )
+        throw new Error();
+      vapid = { publicKey, privateKey, subject };
+    } catch {
+      throw new Error(
+        'VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT must be complete and valid (matching P-256 keys and a public HTTPS or mailto contact).',
+      );
+    }
+  }
   const appUrl = env.APP_URL ?? 'http://localhost:3000';
   const url = new URL(appUrl);
   if (
@@ -46,6 +77,7 @@ export function readConfig(env = process.env): Config {
     return parsed;
   };
   return {
+    vapid,
     appUrl: url.origin,
     port,
     host: env.HOST ?? '0.0.0.0',

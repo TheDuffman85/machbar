@@ -1,5 +1,42 @@
 import { describe, expect, it } from 'vitest';
 import { readConfig } from './config.js';
+import webpush from 'web-push';
+
+describe('Web Push configuration', () => {
+  it('is disabled with absent or empty values', () => {
+    expect(readConfig({}).vapid).toBeNull();
+    expect(
+      readConfig({ VAPID_PUBLIC_KEY: '', VAPID_PRIVATE_KEY: '', VAPID_SUBJECT: '' }).vapid,
+    ).toBeNull();
+  });
+  it('accepts matching P-256 keys and a public contact', () => {
+    const keys = webpush.generateVAPIDKeys();
+    expect(
+      readConfig({
+        VAPID_PUBLIC_KEY: keys.publicKey,
+        VAPID_PRIVATE_KEY: keys.privateKey,
+        VAPID_SUBJECT: 'mailto:owner@example.com',
+      }).vapid,
+    ).toEqual({ ...keys, subject: 'mailto:owner@example.com' });
+  });
+  it('rejects incomplete, mismatched, malformed keys and local contacts', () => {
+    const keys = webpush.generateVAPIDKeys();
+    const valid = {
+      VAPID_PUBLIC_KEY: keys.publicKey,
+      VAPID_PRIVATE_KEY: keys.privateKey,
+      VAPID_SUBJECT: 'mailto:owner@example.com',
+    };
+    for (const env of [
+      { VAPID_PUBLIC_KEY: keys.publicKey },
+      { ...valid, VAPID_PRIVATE_KEY: webpush.generateVAPIDKeys().privateKey },
+      { ...valid, VAPID_PUBLIC_KEY: 'bad' },
+      { ...valid, VAPID_SUBJECT: 'https://localhost' },
+      { ...valid, VAPID_SUBJECT: 'mailto:owner@localhost' },
+      { ...valid, VAPID_SUBJECT: 'ftp://example.com' },
+    ])
+      expect(() => readConfig(env)).toThrow('VAPID');
+  });
+});
 
 describe('Daily page history configuration', () => {
   it('defaults to three days', () => {

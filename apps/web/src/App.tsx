@@ -21,6 +21,8 @@ import { lockPageScroll } from './scrollLock';
 import { buildInfo } from './buildInfo';
 import { Avatar } from './Avatar';
 import { AvatarEditor, type AvatarValue } from './AvatarEditor';
+import { NotificationsPanel } from './NotificationsPanel';
+import { reconcileDeviceNotifications } from './notifications';
 import {
   ArrowDown,
   ArrowUp,
@@ -409,6 +411,20 @@ export function App() {
   entryRef.current = entry;
   const snapshot = entry ? visibleSnapshot(entry) : undefined;
   const preferences = snapshot?.document.preferences;
+  useEffect(() => {
+    const userId = snapshot?.document.userId;
+    if (!userId) return;
+    const reconcile = () => {
+      void reconcileDeviceNotifications(userId).catch(() => {});
+    };
+    reconcile();
+    window.addEventListener('online', reconcile);
+    window.addEventListener('focus', reconcile);
+    return () => {
+      window.removeEventListener('online', reconcile);
+      window.removeEventListener('focus', reconcile);
+    };
+  }, [snapshot?.document.userId]);
   const theme =
     themePreview && !preferences?.onboarded && themePreview.userId === snapshot?.document.userId
       ? themePreview.theme
@@ -1968,6 +1984,7 @@ function Settings() {
           <ProfileForm key={snapshot.document.userId} />
         </section>
         <div>
+          <NotificationsPanel key={snapshot.document.userId} userId={snapshot.document.userId} />
           <section className="panel settings-panel">
             <span className="settings-feature-icon">
               <Download size={24} />
@@ -2367,6 +2384,12 @@ function ChallengeForm({
       : [0, 1, 2, 3, 4, 5, 6],
   );
   const latestSchedule = modal.kind === 'habit' ? modal.habit?.schedules.at(-1) : undefined;
+  const [reminderEnabled, setReminderEnabled] = useState(
+    modal.kind === 'habit' && !!modal.habit?.reminderTime,
+  );
+  const [reminderTime, setReminderTime] = useState(
+    modal.kind === 'habit' ? (modal.habit?.reminderTime ?? '09:00') : '09:00',
+  );
   const initialRecurrence = latestSchedule?.recurrence;
   const initialRepeat = initialRecurrence
     ? initialRecurrence.every === 1
@@ -2431,6 +2454,7 @@ function ChallengeForm({
               : editBoundary));
       body = {
         title,
+        reminderTime: reminderEnabled ? reminderTime : null,
         description,
         color,
         icon,
@@ -2546,6 +2570,32 @@ function ChallengeForm({
       )}
       {modal.kind === 'habit' && (
         <>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={reminderEnabled}
+              onChange={(e) => setReminderEnabled(e.target.checked)}
+            />
+            {t('habitReminder')}
+          </label>
+          {reminderEnabled && (
+            <label>
+              {t('reminderTime')}
+              <input
+                type="time"
+                aria-label={t('reminderTime')}
+                required
+                value={reminderTime}
+                onChange={(e) => setReminderTime(e.target.value)}
+              />
+              <span className="form-hint">
+                {t('reminderTimeHint', {
+                  timezone: latestSchedule?.timezone ?? snapshot.document.preferences.timezone,
+                })}
+              </span>
+              <span className="form-hint">{t('reminderDeviceHint')}</span>
+            </label>
+          )}
           <label>
             {t('repeatInterval')}
             <select

@@ -8,9 +8,15 @@ import { JsonStore } from './store.js';
 import { registerIdentity } from './identity.js';
 import { registerRateLimits } from './rate-limit.js';
 import { isApiRequest } from './api-request.js';
+import { registerNotifications, type NotificationOptions } from './notifications.js';
 
 export async function buildServer(
-  options: { config?: Config; store?: JsonStore; logger?: boolean } = {},
+  options: {
+    config?: Config;
+    store?: JsonStore;
+    logger?: boolean;
+    notifications?: NotificationOptions;
+  } = {},
 ) {
   const config = options.config ?? readConfig();
   const store = options.store ?? new JsonStore(config.dataDir);
@@ -56,6 +62,7 @@ export async function buildServer(
   });
   registerRateLimits(app, config);
   registerIdentity(app, config);
+  registerNotifications(app, config, store, options.notifications);
   const bootstrap = (document: Awaited<ReturnType<JsonStore['read']>>) => ({
     document,
     dailyHistoryDays: config.dailyHistoryDays,

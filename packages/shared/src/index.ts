@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { avatarOptionsSchema } from './avatar.js';
 export { avatarChoices, avatarOptionsSchema, type AvatarOptions } from './avatar.js';
+export { dueReminders, nextLocalMidnight, type DueReminder } from './reminders.js';
 
 export const dateSchema = z
   .string()
@@ -68,6 +69,11 @@ export type EntityIcon = z.infer<typeof iconSchema>;
 export const habitInputSchema = z
   .object({
     title,
+    reminderTime: z
+      .string()
+      .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)
+      .nullable()
+      .optional(),
     description: z.string().max(500).default(''),
     weekdays: weekdaysSchema,
     recurrence: recurrenceSchema.nullable().optional(),

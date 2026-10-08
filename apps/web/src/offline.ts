@@ -420,6 +420,10 @@ export async function switchLocalUser(userId: string): Promise<Entry> {
     body: JSON.stringify({ userId: parsed.data }),
   });
   if (snapshot.document.userId !== parsed.data) throw new ApiError('ACCOUNT_CHANGED', 409);
+  if (id !== parsed.data) {
+    const { disableDeviceNotifications } = await import('./notifications');
+    await disableDeviceNotifications(id, true);
+  }
   // Recheck after the network request, in the same transaction that changes identity.
   return transact(
     'accounts',

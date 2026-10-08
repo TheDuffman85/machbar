@@ -27,7 +27,14 @@ export default defineConfig(({ mode }) => {
         filename: 'sw.ts',
         registerType: 'prompt',
         injectRegister: false,
-        includeAssets: ['favicon.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'],
+        includeAssets: [
+          'favicon.svg',
+          'pwa-192.png',
+          'pwa-512.png',
+          'pwa-maskable.png',
+          'notification-badge.png',
+          'apple-touch-icon.png',
+        ],
         manifest: {
           name: 'Machbar — Small wins. Every day.',
           short_name: 'Machbar',
@@ -38,9 +45,9 @@ export default defineConfig(({ mode }) => {
           background_color: '#f7f8f5',
           theme_color: '#f7f8f5',
           icons: [
-            { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
-            { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-            { src: '/icon-maskable.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+            { src: '/pwa-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+            { src: '/pwa-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+            { src: '/pwa-maskable.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
           ],
         },
         injectManifest: {

@@ -1,6 +1,42 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 const en = {
+  notifications: 'Notifications',
+  notificationsHelp: 'Enable reminders on this device, then choose a reminder time for each habit.',
+  notificationsOfflineHint:
+    'Background reminders need internet. Habit edits and checkoffs work offline, but unsynced changes cannot cancel a reminder already queued. Delayed reminders expire at the end of the habit’s local day.',
+  notificationsEnabled: 'Enabled on this device',
+  notificationsDisabled: 'Disabled on this device',
+  notificationPermission_default: 'Permission not requested',
+  notificationPermission_granted: 'Permission granted',
+  notificationPermission_denied: 'Permission blocked',
+  enableNotifications: 'Enable notifications',
+  disableNotifications: 'Disable notifications',
+  notificationTestSent: 'Test notification sent.',
+  testNotification: 'Send test notification',
+  habitReminder: 'Remind me about this habit',
+  reminderTime: 'Reminder time',
+  reminderTimeHint:
+    'Time follows {{timezone}} and any future timezone changes. Longer-period habits remind daily until completed.',
+  reminderDeviceHint:
+    'Enable notifications in Settings on each device where you want reminders. Changes apply after synchronization.',
+  NOTIFICATIONS_HTTPS: 'Notifications require HTTPS or localhost.',
+  NOTIFICATIONS_IOS_INSTALL:
+    'On iPhone and iPad (iOS 16.4 or later), add Machbar to your Home Screen and open it there to enable notifications.',
+  NOTIFICATIONS_UNSUPPORTED: 'This browser does not support background push notifications.',
+  NOTIFICATIONS_UNAVAILABLE:
+    'Notifications are unavailable. Ask your server administrator to enable them.',
+  NOTIFICATIONS_BLOCKED:
+    'Notifications were not allowed. If blocked, change permission in your browser or device notification settings.',
+  NOTIFICATIONS_DISABLED: 'Enable notifications on this device first.',
+  NOTIFICATION_WORKER_NOT_READY:
+    'Install any available Machbar update, then reopen the app to enable notifications.',
+  NOTIFICATION_DELIVERY_FAILED:
+    'The notification could not be sent. Check your connection and try again.',
+  NOTIFICATION_DEVICE_LIMIT: 'This profile has reached its notification device limit.',
+  PUSH_DATA_CORRUPT:
+    'Notification data could not be read. Ask the server administrator to check the saved push state.',
+
   progress: 'Progress',
   navigation: 'Main navigation',
   tagline: 'Small wins. Every day.',
@@ -461,6 +497,44 @@ const en = {
   sourceCode: 'Open-source credits',
 };
 const de: typeof en = {
+  notifications: 'Benachrichtigungen',
+  notificationsHelp:
+    'Aktiviere Erinnerungen auf diesem Gerät und wähle für jede Gewohnheit eine Erinnerungszeit.',
+  notificationsOfflineHint:
+    'Erinnerungen im Hintergrund brauchen Internet. Gewohnheiten und Erfolge funktionieren offline, aber noch nicht synchronisierte Änderungen können bereits versendete Erinnerungen nicht stoppen. Verspätete Erinnerungen verfallen am Ende des lokalen Tages der Gewohnheit.',
+  notificationsEnabled: 'Auf diesem Gerät aktiviert',
+  notificationsDisabled: 'Auf diesem Gerät deaktiviert',
+  notificationPermission_default: 'Berechtigung noch nicht angefragt',
+  notificationPermission_granted: 'Berechtigung erteilt',
+  notificationPermission_denied: 'Berechtigung blockiert',
+  enableNotifications: 'Benachrichtigungen aktivieren',
+  disableNotifications: 'Benachrichtigungen deaktivieren',
+  notificationTestSent: 'Testbenachrichtigung gesendet.',
+  testNotification: 'Testbenachrichtigung senden',
+  habitReminder: 'An diese Gewohnheit erinnern',
+  reminderTime: 'Erinnerungszeit',
+  reminderTimeHint:
+    'Die Zeit folgt {{timezone}} und zukünftigen Zeitzonenänderungen. Bei längeren Zeiträumen wird täglich bis zum Abschluss erinnert.',
+  reminderDeviceHint:
+    'Aktiviere Benachrichtigungen in den Einstellungen auf jedem gewünschten Gerät. Änderungen gelten nach der Synchronisierung.',
+  NOTIFICATIONS_HTTPS: 'Benachrichtigungen brauchen HTTPS oder localhost.',
+  NOTIFICATIONS_IOS_INSTALL:
+    'Füge Machbar auf iPhone und iPad (ab iOS 16.4) zum Home-Bildschirm hinzu und öffne die App dort, um Benachrichtigungen zu aktivieren.',
+  NOTIFICATIONS_UNSUPPORTED:
+    'Dieser Browser unterstützt keine Push-Benachrichtigungen im Hintergrund.',
+  NOTIFICATIONS_UNAVAILABLE:
+    'Benachrichtigungen sind nicht verfügbar. Bitte den Serveradministrator, sie zu aktivieren.',
+  NOTIFICATIONS_BLOCKED:
+    'Benachrichtigungen wurden nicht erlaubt. Ändere bei einer Blockierung die Berechtigung in den Browser- oder Geräteeinstellungen.',
+  NOTIFICATIONS_DISABLED: 'Aktiviere zuerst Benachrichtigungen auf diesem Gerät.',
+  NOTIFICATION_WORKER_NOT_READY:
+    'Installiere verfügbare Machbar-Updates und öffne die App erneut, um Benachrichtigungen zu aktivieren.',
+  NOTIFICATION_DELIVERY_FAILED:
+    'Die Benachrichtigung konnte nicht gesendet werden. Prüfe die Verbindung und versuche es erneut.',
+  NOTIFICATION_DEVICE_LIMIT: 'Dieses Profil hat die Grenze für Benachrichtigungsgeräte erreicht.',
+  PUSH_DATA_CORRUPT:
+    'Benachrichtigungsdaten konnten nicht gelesen werden. Bitte den Serveradministrator, die gespeicherten Push-Daten zu prüfen.',
+
   progress: 'Fortschritt',
   navigation: 'Hauptnavigation',
   tagline: 'Kleine Erfolge. Jeden Tag.',

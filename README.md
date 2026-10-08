@@ -23,6 +23,40 @@ By default the port binds to all network interfaces. Other devices can open `htt
 
 Run **one application instance** against the data volume. JSON writes are serialized per user and saved through flush and atomic rename; this is not a shared-filesystem cluster or a horizontally scalable service.
 
+## Optional habit notifications
+
+In **Settings → Notifications**, enable notifications separately in each browser or installed PWA where you want reminders. Then edit a habit, turn on **Remind me about this habit**, and choose its time. Existing habits have reminders disabled. Times follow the habit’s active schedule timezone, including deferred timezone changes. Daily and weekday habits remind only on scheduled days; weekly, monthly, and multi-day habits remind daily while the current period remains unfinished. Archived and completed habits do not produce new reminders. The same profile can receive reminders on multiple opted-in devices (up to 32).
+
+Background delivery uses standard Web Push. Android and compatible desktop browsers support it; on **iOS/iPadOS 16.4 or later**, add Machbar to the Home Screen and open the installed app to enable notifications. Ordinary iOS browser tabs cannot receive push notifications. HTTPS is required outside localhost. Delivery is best effort and may be delayed or restricted by the browser, operating system, battery settings, or Focus mode; it is not an exact alarm.
+
+The server and device need internet access for delivery. Fully offline scheduled background reminders are not supported by this PWA. Reminder edits and checkoffs still save offline and apply to the server after synchronization. An offline completion, reminder change, or archive cannot reliably cancel an already queued message. Messages expire at the next local midnight; reconnecting earlier can deliver a delayed reminder. Server restarts catch up on due reminders from the current local day, without replaying earlier days. Notifications display the habit title and open Today when clicked.
+
+To enable delivery on your self-hosted server, generate a matching VAPID key pair **once**:
+
+```bash
+pnpm --filter @machbar/api exec web-push generate-vapid-keys --json
+```
+
+For a Docker-only installation, generate keys using the built image:
+
+```bash
+docker compose run --rm --no-deps machbar node -e 'console.log(JSON.stringify(require("./api/node_modules/web-push").generateVAPIDKeys()))'
+```
+
+Copy the output into `.env`, together with a real contact address:
+
+```dotenv
+VAPID_PUBLIC_KEY=<publicKey>
+VAPID_PRIVATE_KEY=<privateKey>
+VAPID_SUBJECT=mailto:you@example.com
+```
+
+Restart the server or recreate the Compose container. Keep the key pair stable and the private key private; rotating keys requires re-enabling notifications on each device. All three values absent/empty disables server notification support. Incomplete configuration, invalid or mismatched keys, and invalid contact addresses fail startup. No Firebase account or Apple developer membership is needed. The server requires outbound HTTPS to browser push services, including Google, Mozilla, and Apple (`*.push.apple.com`); the site and API remain self-hosted.
+
+Subscriptions and dispatch records are saved separately in `DATA_DIR/push-state.json` with owner-only permissions. Include this file in stopped-server backups, alongside the profile JSON files, and preserve the VAPID configuration. Successful dispatches and ambiguous delivery attempts are not replayed after restart; DNS/connection failures before delivery and explicit 429/5xx push-service failures retry with backoff until expiry, and 404/410 removes expired subscriptions. A crash between claiming a dispatch and sending it can miss that reminder. The Settings test button verifies the delivery path and allows one test per minute per device.
+
+Disabling notifications immediately clears this device’s local opt-in, unsubscribes from browser push, and closes displayed reminders. If server cleanup is offline, it retries after reconnection. Switching profiles removes the old device binding; the new profile requires explicit opt-in. Browser permission itself remains under browser/device settings. After upgrading Machbar, install the offered update and reopen old tabs before enabling or editing reminders; no profile reset is required.
+
 ## Browser profiles
 
 There is no login. Each browser receives a unique UUID stored in local storage (`machbar-user-id`), with its profile saved in a separate `<userId>.json` file on the server. Open **Switch User** from the avatar menu to see and copy your ID or QR code. On another device, enter that existing ID, scan its QR code with the camera, or upload a QR image, then choose **Switch profile**. Camera scanning requires HTTPS or localhost; manual entry and QR image upload also work on LAN HTTP. Sync or discard pending changes before switching. Your previous profile stays saved.
@@ -74,7 +108,7 @@ Settings shows the installed frontend version and build date. Every Vite build (
 - Undo recalculates XP, levels, streaks, badges, and unclaimed gifts. Claimed gifts remain in history. Archiving retains completion records and earned XP.
 - After the first connected visit, install the app through your browser. On iOS use **Share → Add to Home Screen**.
 - Individual goal steps can be deleted after confirmation. Deletion removes the step and its completion progress, including its XP, and survives synchronization with other devices. Goals themselves can still be archived with their history preserved.
-- After the first connected profile visit, every feature except switching profiles works offline: create/edit/archive habits, goals and gifts, create/edit/delete steps, reorder steps, check off or undo tasks, claim gifts, and save settings or avatars. Changes are committed to IndexedDB before the UI confirms success and survive reloads. Onboarding can finish offline once the initial profile has loaded. A new profile cannot initialize without that first connection.
+- After the first connected profile visit, every feature except switching profiles and notification setup/delivery works offline: create/edit/archive habits, goals and gifts, create/edit/delete steps, reorder steps, check off or undo tasks, claim gifts, and save settings or avatars. Changes are committed to IndexedDB before the UI confirms success and survive reloads. Onboarding can finish offline once the initial profile has loaded. A new profile cannot initialize without that first connection.
 - Local changes, reconnection, foreground focus, app launch, and manual retry trigger background synchronization. While the page is visible, idle sync checks every 5 seconds bring in changes from other devices without a refresh; hidden pages check every 60 seconds and sync immediately when brought forward. Cached startup and local saves never wait for API availability. The sync notice appears only after an operation has been running for 2.5 seconds. Requests time out after 10 seconds; failures retry with backoff and do not interrupt edits with network error dialogs. Background Sync support is not required. Retries are idempotent, and duplicate wins earn XP once.
 - **Settings → View sync log** shows the last 50 sync operations for the current profile on this device, including timestamps, durations, pending change counts, retries, and outcomes. The log persists in IndexedDB and can be viewed offline.
 - Browser-ID switches keep local documents, sync baselines, pending changes, and sync logs scoped to their original ID. Pending changes are never replayed into another account. IndexedDB transactions coordinate local writes across tabs; server revision checks coordinate concurrent uploads without holding browser locks during network requests.
@@ -94,6 +128,15 @@ All `/api/*` routes require the profile's UUID access key in `X-Machbar-User`. M
 | `POST /api/local-user` | Load an existing profile; `{ userId }` must match the header |
 | `PUT /api/sync`        | Save a complete merged `UserDocument`                        |
 | `GET /health`          | Process health                                               |
+
+Notification routes also require the identity header and same-origin writes:
+
+| Route                                    | Purpose                                                   |
+| ---------------------------------------- | --------------------------------------------------------- |
+| `GET /api/notifications/config`          | `{ available, publicKey }`; never exposes the private key |
+| `PUT /api/notifications/subscription`    | Register `{ subscription }`; returns `{ bindingId }`      |
+| `DELETE /api/notifications/subscription` | Remove this profile’s `{ bindingId }` idempotently        |
+| `POST /api/notifications/test`           | Send a test to this profile’s `{ bindingId }`             |
 
 Bootstrap, profile switching, and sync return `{ document, dailyHistoryDays }`. The client calculates today, XP, levels, streaks, achievements, goal progress, gift availability, and plant growth.
 

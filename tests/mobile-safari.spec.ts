@@ -123,3 +123,28 @@ test('forms stay readable and fit the viewport from onboarding through editing',
     await expectReadableControls(page);
   }
 });
+
+test('notification settings explain iOS installation and fit mobile screens', async ({ page }) => {
+  await onboard(page);
+  await page.getByRole('button', { name: 'Profile menu', exact: true }).tap();
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).tap();
+  await expect(page.getByRole('heading', { name: 'Notifications', exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Enable notifications', exact: true }),
+  ).toBeDisabled();
+  if (test.info().project.name === 'iphone') {
+    await expect(page.getByText(/^On iPhone and iPad \(iOS 16\.4 or later\)/)).toBeVisible();
+  }
+  await expectFitsViewport(page);
+  await page.locator('nav:visible').getByRole('link', { name: 'Habits', exact: true }).tap();
+  await page.getByRole('button', { name: 'Add a habit', exact: true }).first().tap();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('checkbox', { name: 'Remind me about this habit', exact: true }).check();
+  await expect(dialog.getByLabel('Reminder time', { exact: true })).toHaveValue('09:00');
+  await expectReadableControls(page);
+  await dialog.getByLabel('Reminder time', { exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: `test-results/reminder-form-${test.info().project.name}.png`,
+    fullPage: true,
+  });
+});
