@@ -138,6 +138,19 @@ const Context = createContext<AppContext | null>(null);
 function useApp() {
   return useContext(Context)!;
 }
+// The plugin's updateServiceWorker only reloads when the page was controlled at registration
+// and silently does nothing without a waiting worker, so activate and reload explicitly.
+async function applyUpdate() {
+  const waiting = (await navigator.serviceWorker?.getRegistration())?.waiting;
+  if (!waiting) {
+    window.location.reload();
+    return;
+  }
+  const reload = () => window.location.reload();
+  navigator.serviceWorker.addEventListener('controllerchange', reload, { once: true });
+  waiting.addEventListener('statechange', () => waiting.state === 'activated' && reload());
+  waiting.postMessage({ type: 'SKIP_WAITING' });
+}
 const colors = ['sage', 'peach', 'lavender', 'blue'] as const;
 const badgeDefinitions = [
   ['wins-1', 'badgeWins1', 'badgeWinsDescription', 1, Leaf],
@@ -402,7 +415,6 @@ export function App() {
   const retryDelayRef = useRef(5_000);
   const {
     needRefresh: [needRefresh],
-    updateServiceWorker,
   } = useRegisterSW();
   const entry = query.data;
   entryRef.current = entry;
@@ -737,10 +749,7 @@ export function App() {
               {needRefresh && (
                 <div className="notice">
                   <span>{t(entry.queue.length ? 'updatePending' : 'updateReady')}</span>
-                  <button
-                    disabled={entry.queue.length > 0}
-                    onClick={() => void updateServiceWorker(true)}
-                  >
+                  <button disabled={entry.queue.length > 0} onClick={() => void applyUpdate()}>
                     {t('update')}
                   </button>
                 </div>
