@@ -20,9 +20,10 @@ Machbar is a self-hosted, mobile-first app for building habits, breaking goals i
 ## Features
 
 - **Flexible habits:** daily, selected weekdays, weekly, monthly, or custom intervals, with streaks, past-day logging, and archiving that keeps your history.
-- **Goals in small steps:** dated or undated steps, reordering, and a Today view that brings your next actions together.
+- **Goals in small steps:** optional due dates, dated or undated steps, reordering, and a Today view that brings your next actions together.
 - **Progress you can see:** 10 XP per win, a new level every 100 XP, achievement badges, and a growing plant.
-- **Rewards for yourself:** unlock gifts by completing a goal, reaching a habit completion count, or building a streak.
+- **Gifts for yourself:** pick a treat with an icon, notes, and links, and unlock it by completing a goal, reaching a habit completion count, or building a streak. Received gifts stay in your history and appear on the day you received them.
+- **Clean up without losing history:** delete habits, goals, steps, and gifts you never used; archive anything with checkoffs to keep its XP and history.
 - **Offline use and device sync:** edit, check off, and save locally; changes sync automatically when you reconnect, with a sync log and in-app update prompts.
 - **No passwords for your profile:** open the same profile on another device by entering its private ID or scanning its QR code.
 - **Optional reminders:** Web Push notifications with a reminder time for each habit, goal, and step, plus one-time hints to install the app and turn on notifications.
@@ -32,19 +33,84 @@ Machbar is a self-hosted, mobile-first app for building habits, breaking goals i
 
 ## Screenshots
 
-Today brings your habits, goal steps, streaks, and next reward together.
+Every page on mobile (left) and desktop (right). Screenshots use demo profiles.
 
-![Machbar Today dashboard showing daily challenges, plant growth, streaks, and rewards](docs/images/today-desktop.png)
+**Today:** Your habits, goal steps, streaks, achievements, and next gift in one place, with a plant that grows with your progress.
 
-|                                                   Habits                                                    |                                                       Goals                                                       |                                                    Rewards                                                     |
-| :---------------------------------------------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------------: |
-| <img src="docs/images/habits-mobile.png" alt="Mobile habits view with schedules and streaks" width="260" /> | <img src="docs/images/goals-mobile.png" alt="Mobile goals view with steps and completion progress" width="260" /> | <img src="docs/images/rewards-mobile.png" alt="Mobile rewards view with milestone gifts and XP" width="260" /> |
+<p align="center">
+  <img src="docs/images/today-mobile.png" alt="Mobile Today page with daily challenges, plant growth, streaks, and achievements" width="197" />
+  <img src="docs/images/today-desktop.png" alt="Desktop Today page with daily challenges, plant growth, streaks, and achievements" width="576" />
+</p>
 
-The optional admin page shows every profile with its usage, lets you delete profiles, and can open sign-ups for a limited time.
+**Welcome:** Create a profile with a name, avatar, language, timezone, and theme.
 
-![Machbar admin page listing profiles with stats, storage usage, and temporary user creation controls](docs/images/admin-desktop.png)
+<p align="center">
+  <img src="docs/images/welcome-mobile.png" alt="Mobile first-run setup" width="197" />
+  <img src="docs/images/welcome-desktop.png" alt="Desktop first-run setup" width="576" />
+</p>
 
-Screenshots use demo profiles.
+**Habits:** Schedules, streaks, reminders, and archived habits.
+
+<p align="center">
+  <img src="docs/images/habits-mobile.png" alt="Mobile habits list with schedules and streaks" width="197" />
+  <img src="docs/images/habits-desktop.png" alt="Desktop habits list with schedules and streaks" width="576" />
+</p>
+
+**Goals:** Goals broken into dated or undated steps.
+
+<p align="center">
+  <img src="docs/images/goals-mobile.png" alt="Mobile goals with steps and progress" width="197" />
+  <img src="docs/images/goals-desktop.png" alt="Desktop goals with steps and progress" width="576" />
+</p>
+
+**Gifts:** Treats that unlock at milestones, with notes, links, and an archive.
+
+<p align="center">
+  <img src="docs/images/gifts-mobile.png" alt="Mobile gifts with unlock progress" width="197" />
+  <img src="docs/images/gifts-desktop.png" alt="Desktop gifts with unlock progress" width="576" />
+</p>
+
+**Achievements:** Badges for wins, streaks, and finished goals.
+
+<p align="center">
+  <img src="docs/images/achievements-mobile.png" alt="Mobile achievement badges" width="197" />
+  <img src="docs/images/achievements-desktop.png" alt="Desktop achievement badges" width="576" />
+</p>
+
+**Settings:** Profile, avatar, language, theme, notifications, and app installation.
+
+<p align="center">
+  <img src="docs/images/settings-mobile.png" alt="Mobile settings" width="197" />
+  <img src="docs/images/settings-desktop.png" alt="Desktop settings" width="576" />
+</p>
+
+**Sync log:** Recent sync attempts on this device.
+
+<p align="center">
+  <img src="docs/images/sync-log-mobile.png" alt="Mobile sync log" width="197" />
+  <img src="docs/images/sync-log-desktop.png" alt="Desktop sync log" width="576" />
+</p>
+
+**Switch User:** Your private ID and QR code, and switching to another profile.
+
+<p align="center">
+  <img src="docs/images/switch-user-mobile.png" alt="Mobile profile ID, QR code, and profile switching" width="197" />
+  <img src="docs/images/switch-user-desktop.png" alt="Desktop profile ID, QR code, and profile switching" width="576" />
+</p>
+
+**Admin sign-in:** The optional, hidden admin page asks for its password.
+
+<p align="center">
+  <img src="docs/images/admin-login-mobile.png" alt="Mobile admin sign-in" width="197" />
+  <img src="docs/images/admin-login-desktop.png" alt="Desktop admin sign-in" width="576" />
+</p>
+
+**Admin:** Profiles with their usage, rate limits, and sign-up controls.
+
+<p align="center">
+  <img src="docs/images/admin-mobile.png" alt="Mobile admin page with profiles, storage, and rate limits" width="197" />
+  <img src="docs/images/admin-desktop.png" alt="Desktop admin page with profiles, storage, and rate limits" width="576" />
+</p>
 
 ## Installation
 
@@ -205,7 +271,7 @@ VAPID_PRIVATE_KEY=<privateKey>
 VAPID_SUBJECT=mailto:you@example.com
 ```
 
-Recreate the container, then enable **Settings → Notifications** on each device. Edit a habit, enable **Remind me about this habit**, and choose its time. Reminder times follow the habit's schedule timezone.
+Recreate the container, then enable **Settings → Notifications** on each device. Edit a habit, goal, or step, enable its reminder, and choose its time. Habit reminders follow the habit's schedule timezone; goal and step reminders use the profile timezone and repeat daily until completed, starting on the due date when one is set.
 
 Leave all three variables empty to disable server notifications; incomplete or invalid configuration prevents startup. Keep the key pair stable and the private key private. On iOS/iPadOS 16.4 or later, enable notifications from the installed Home Screen app. Delivery requires internet access and is best effort. See the [notification reference](docs/deployment.md#optional-habit-notifications) for supported devices, delivery behavior, and key rotation.
 
