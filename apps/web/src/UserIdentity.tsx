@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 import jsQR from 'jsqr';
 import { localUserIdSchema } from '@machbar/shared';
 import { ApiError } from './offline';
+import { noAutofill } from './noAutofill';
 
 function decodeImage(source: CanvasImageSource, width: number, height: number): string | undefined {
   const scale = Math.min(1, 1200 / Math.max(width, height));
@@ -193,7 +194,7 @@ export function UserIdentity({
             <form onSubmit={(event) => event.preventDefault()}>
               <label>
                 {t('currentUserId')}
-                <input ref={currentId} readOnly value={userId} spellCheck={false} />
+                <input ref={currentId} readOnly value={userId} spellCheck={false} {...noAutofill} />
               </label>
               <button type="button" className="button secondary" onClick={() => void copyId()}>
                 <Copy size={16} />
@@ -220,7 +221,7 @@ export function UserIdentity({
                 required
                 maxLength={100}
                 autoCapitalize="none"
-                autoComplete="off"
+                {...noAutofill}
                 spellCheck={false}
                 disabled={disabled || reading}
               />

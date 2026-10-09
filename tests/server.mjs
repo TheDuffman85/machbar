@@ -6,6 +6,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { databaseFilename } from '../apps/api/dist/database.js';
 import { SqliteStore } from '../apps/api/dist/store.js';
 import { readConfig } from '../apps/api/dist/config.js';
+import { hashAdminPassword } from '../apps/api/dist/hash-admin-password.js';
+import { UserCreation } from '../apps/api/dist/user-creation.js';
 import { userDocumentSchema } from '../packages/shared/dist/index.js';
 const directory = await mkdtemp(join(tmpdir(), 'machbar-browser-'));
 const store = new SqliteStore(directory);
@@ -17,11 +19,13 @@ const config = {
     RATE_LIMIT_MAX_PER_IP: '100000',
     RATE_LIMIT_MAX_PER_USER: '100000',
     RATE_LIMIT_MAX_NEW_USERS: '100000',
+    ADMIN_PASSWORD_HASH: await hashAdminPassword('browser-test-admin'),
   }),
   dataDir: directory,
   webDir: resolve('apps/web/dist'),
 };
-const app = await buildServer({ config, store });
+const userCreation = new UserCreation(config);
+const app = await buildServer({ config, store, userCreation });
 // Test-only fixtures. These routes are never included in the production server.
 app.post('/api/test/config', async (request) => {
   config.disableUserCreation = request.body.disableUserCreation === true;
@@ -29,10 +33,11 @@ app.post('/api/test/config', async (request) => {
 });
 app.post('/api/test/reset', async () => {
   config.disableUserCreation = false;
+  userCreation.close();
   const database = new DatabaseSync(join(directory, databaseFilename));
   try {
     database.exec(`PRAGMA foreign_keys = ON; BEGIN;
-      DELETE FROM completions; DELETE FROM gifts; DELETE FROM profiles;
+      DELETE FROM completions; DELETE FROM gifts; DELETE FROM profiles; DELETE FROM deleted_profiles;
       DELETE FROM push_bindings; DELETE FROM push_dispatches; DELETE FROM push_state; COMMIT;`);
   } finally {
     database.close();

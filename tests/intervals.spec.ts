@@ -1,3 +1,4 @@
+import { dismissedHints } from './setup-hints.js';
 import { AxeBuilder } from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { mutateDocument } from '../packages/shared/src/index.js';
@@ -329,7 +330,7 @@ test('two offline devices checking different dates sync to one weekly win', asyn
   await expect(
     page.getByRole('button', { name: 'Complete Shared week', exact: true }),
   ).toBeVisible();
-  const otherContext = await browser.newContext({ baseURL: base });
+  const otherContext = await browser.newContext({ baseURL: base, storageState: dismissedHints });
   try {
     await otherContext.addInitScript(
       (userId) => localStorage.setItem('machbar-user-id', userId),

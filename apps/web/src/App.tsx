@@ -29,6 +29,7 @@ import {
   type NotificationConfig,
 } from './notifications';
 import { deviceNotifications } from './notificationState';
+import { noAutofill } from './noAutofill';
 import {
   ArrowDown,
   ArrowUp,
@@ -92,11 +93,15 @@ import {
   subscribeEntries,
   mutate,
   request,
+  startNewProfile,
   switchLocalUser,
   toggleCompletion,
   visibleSnapshot,
   type Entry,
 } from './offline';
+
+const isProfileDeleted = (error: unknown) =>
+  error instanceof ApiError && error.code === 'PROFILE_DELETED';
 
 type InstallPrompt = Event & {
   prompt: () => Promise<void>;
@@ -578,6 +583,7 @@ export function App() {
     syncingRef.current = true;
     setSyncing(true);
     let succeeded = false;
+    let deleted = false;
     try {
       const next = await syncEntry();
       succeeded = true;
@@ -594,6 +600,12 @@ export function App() {
         e.code === 'STORAGE_UNAVAILABLE'
       )
         setError(e.code);
+      // The server deleted this profile. Its local copy is gone; reload to show
+      // the deletion screen instead of retrying in the background.
+      if (syncingUserId === localStorage.getItem(localUserIdKey) && isProfileDeleted(e)) {
+        deleted = true;
+        void queryClient.resetQueries({ queryKey: ['machbar'] });
+      }
     } finally {
       syncingRef.current = false;
       setSyncing(false);
@@ -602,6 +614,7 @@ export function App() {
       const userChanged = syncingUserId !== localStorage.getItem(localUserIdKey);
       if (userChanged) retryDelayRef.current = 5_000;
       if ((succeeded || userChanged) && syncRequestedRef.current) void syncRef.current();
+      else if (deleted) syncRequestedRef.current = false;
       else {
         syncRequestedRef.current = false;
         syncTimerRef.current = window.setTimeout(
@@ -632,7 +645,8 @@ export function App() {
           return next;
         }
       } catch (e) {
-        setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
+        if (isProfileDeleted(e)) void queryClient.resetQueries({ queryKey: ['machbar'] });
+        else setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
       }
     };
     const identityChanged = (event: StorageEvent) => {
@@ -748,6 +762,39 @@ export function App() {
     </>
   );
   if (!entry || !snapshot) {
+    if (isProfileDeleted(query.error)) {
+      return (
+        <main className="profile-selection">
+          <Brand />
+          <p className="muted">{t('PROFILE_DELETED')}</p>
+          {error && <p role="alert">{t(error)}</p>}
+          <button
+            className="button primary"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await startNewProfile();
+                await queryClient.resetQueries({ queryKey: ['machbar'] });
+                void sync();
+              } catch (e) {
+                setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {t('startNewProfile')}
+          </button>
+          <UserIdentity
+            userId={null}
+            disabled={busy || !online}
+            pending={false}
+            onSwitch={changeUser}
+          />
+        </main>
+      );
+    }
     if (query.error instanceof ApiError && query.error.code === 'USER_CREATION_DISABLED') {
       return (
         <main className="profile-selection">
@@ -2339,7 +2386,7 @@ function ProfileForm({
               }));
             }
           }}
-          autoComplete="given-name"
+          {...noAutofill}
         />
       </label>
       <div className="form-two">
@@ -2595,6 +2642,7 @@ function ChallengeForm({
           required
           autoFocus
           maxLength={160}
+          {...noAutofill}
           value={title}
           placeholder={t(
             modal.kind === 'habit'

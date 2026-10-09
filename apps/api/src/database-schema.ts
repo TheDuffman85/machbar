@@ -14,7 +14,10 @@ CREATE TABLE profiles (
   avatar_seed TEXT NOT NULL,
   avatar_mode INTEGER NOT NULL CHECK (avatar_mode IN (0, 1, 2)),
   onboarded INTEGER NOT NULL CHECK (onboarded IN (0, 1)),
-  logical_bytes INTEGER NOT NULL CHECK (logical_bytes >= 0)
+  logical_bytes INTEGER NOT NULL CHECK (logical_bytes >= 0),
+  -- Server write times for the admin page; NULL for profiles imported before v3.
+  created_at TEXT,
+  updated_at TEXT
 ) STRICT;
 CREATE TABLE profile_avatars (
   user_id TEXT PRIMARY KEY REFERENCES profiles(user_id) ON DELETE CASCADE,
@@ -124,6 +127,12 @@ CREATE TABLE operations (
   fingerprint TEXT NOT NULL,
   version INTEGER NOT NULL,
   PRIMARY KEY (user_id, id)
+) STRICT;
+-- Profiles removed by an administrator. Their IDs can never be saved again,
+-- so devices that still hold a local copy cannot recreate them.
+CREATE TABLE deleted_profiles (
+  user_id TEXT PRIMARY KEY,
+  deleted_at TEXT NOT NULL
 ) STRICT;
 CREATE TABLE push_state (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),

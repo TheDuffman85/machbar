@@ -11,7 +11,7 @@ export type { RecordKind } from './database-records.js';
 
 export const databaseFilename = 'data.db';
 export const migrationBackupDirectory = 'migration-backup';
-const schemaVersion = 2;
+const schemaVersion = 3;
 
 // Relational rows own persistence. JSON is only the API encoding and legacy
 // import format; archived files remain immutable recovery snapshots.
@@ -71,7 +71,7 @@ export class SqliteDatabase {
             const archive = db.prepare('INSERT INTO migration_files (name, sha256) VALUES (?, ?)');
             for (const record of legacy) {
               try {
-                writeRecord(db, record.kind, record.key, record.contents);
+                writeRecord(db, record.kind, record.key, record.contents, null);
               } catch (cause) {
                 throw new Error(
                   `Cannot migrate ${record.name}; original file preserved. Repair it and restart.`,
@@ -99,7 +99,7 @@ export class SqliteDatabase {
               try {
                 if (record.kind !== 'profile' && record.kind !== 'push')
                   throw new Error('Unknown record kind');
-                writeRecord(db, record.kind, String(record.key), String(record.contents));
+                writeRecord(db, record.kind, String(record.key), String(record.contents), null);
               } catch (cause) {
                 throw new Error(
                   `Cannot normalize SQLite ${record.kind} record ${record.key}; original database preserved.`,
@@ -109,6 +109,20 @@ export class SqliteDatabase {
             }
             db.exec(`DROP TABLE records; PRAGMA user_version = ${schemaVersion}`);
           }
+          db.exec('COMMIT');
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
+      }
+      if (version() === 2) {
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          if (version() === 2)
+            db.exec(`ALTER TABLE profiles ADD COLUMN created_at TEXT;
+              ALTER TABLE profiles ADD COLUMN updated_at TEXT;
+              CREATE TABLE deleted_profiles (user_id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL) STRICT;
+              PRAGMA user_version = ${schemaVersion};`);
           db.exec('COMMIT');
         } catch (error) {
           db.exec('ROLLBACK');
@@ -129,6 +143,7 @@ export class SqliteDatabase {
         'gifts',
         'completions',
         'operations',
+        'deleted_profiles',
         'push_state',
         'push_bindings',
         'push_dispatches',
@@ -261,6 +276,11 @@ export class SqliteDatabase {
       db.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  async deleted(userId: string): Promise<boolean> {
+    const db = await this.ready();
+    return !!db.prepare('SELECT 1 FROM deleted_profiles WHERE user_id = ?').get(userId);
   }
 
   async close() {

@@ -1,3 +1,4 @@
+import { dismissedHints } from './setup-hints.js';
 import { expect, test, type Page } from '@playwright/test';
 import { AxeBuilder } from '@axe-core/playwright';
 import { createUser } from '../packages/shared/src/index.js';
@@ -67,7 +68,7 @@ test('browser IDs persist, isolate progress, and can switch manually or by QR im
     fullPage: true,
   });
 
-  const otherContext = await browser.newContext({ locale: 'en-US' });
+  const otherContext = await browser.newContext({ locale: 'en-US', storageState: dismissedHints });
   try {
     const other = await otherContext.newPage();
     await onboard(other, 'Bob');
@@ -193,7 +194,7 @@ test('an existing profile can be restored during onboarding, and switching is bl
 }) => {
   await onboard(page, 'Alex');
   const id = (await readSnapshot(page)).document.userId;
-  const otherContext = await browser.newContext({ locale: 'en-US' });
+  const otherContext = await browser.newContext({ locale: 'en-US', storageState: dismissedHints });
   try {
     const other = await otherContext.newPage();
     await other.goto(base);
@@ -233,7 +234,7 @@ test('switching profiles updates other tabs without mixing their data', async ({
 }) => {
   await onboard(page, 'Alice');
   const alice = (await readSnapshot(page)).document.userId;
-  const otherContext = await browser.newContext({ locale: 'en-US' });
+  const otherContext = await browser.newContext({ locale: 'en-US', storageState: dismissedHints });
   try {
     const other = await otherContext.newPage();
     await onboard(other, 'Bob');
@@ -328,7 +329,7 @@ test('disabled user creation offers only existing profiles and preserves normal 
     headers: { origin: base, 'X-Machbar-User': '00000000-0000-4000-8000-000000000001' },
     data: { disableUserCreation: true },
   });
-  const freshContext = await browser.newContext({ locale: 'en-US' });
+  const freshContext = await browser.newContext({ locale: 'en-US', storageState: dismissedHints });
   try {
     const fresh = await freshContext.newPage();
     await fresh.goto(base);

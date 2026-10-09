@@ -1,3 +1,4 @@
+import { dismissedHints } from './setup-hints.js';
 import { expect, test, type Page } from '@playwright/test';
 import { localEntry, readSnapshot, writeSnapshot } from './helpers.js';
 import { mutateDocument } from '../packages/shared/src/index.js';
@@ -528,7 +529,7 @@ test('online devices receive creations, completions and undo without refreshing 
 }) => {
   await ready(page);
   const baseline = await readSnapshot(page);
-  const otherContext = await browser.newContext({ locale: 'en-US' });
+  const otherContext = await browser.newContext({ locale: 'en-US', storageState: dismissedHints });
   try {
     await otherContext.addInitScript(
       (id) => localStorage.setItem('machbar-user-id', id),
@@ -587,7 +588,7 @@ test('offline devices merge additions, independent fields and shared completions
   await ready(page);
   await create(page, 'Add a habit', 'Shared walk');
   const baseline = await readSnapshot(page);
-  const otherContext = await browser.newContext({ locale: 'en-US' });
+  const otherContext = await browser.newContext({ locale: 'en-US', storageState: dismissedHints });
   try {
     await otherContext.addInitScript(
       (id) => localStorage.setItem('machbar-user-id', id),

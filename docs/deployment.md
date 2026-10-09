@@ -102,7 +102,7 @@ Existing SQLite schema version 1 databases automatically migrate from JSON paylo
 
 After a successful import, SQLite is authoritative. The server creates `DATA_DIR/migration-backup` when needed and moves the imported profile JSON files and `push-state.json` into it, preserving their contents. These recovery snapshots do not count toward the payload quota and are never reimported into that database. A durable archive queue resumes interrupted moves on startup. If a backup destination contains different data, startup stops without overwriting it or removing the original; resolve the conflict and restart to finish archiving. The SQLite import remains saved. New profiles and subsequent changes are written only to SQLite. Keep the originals private and remove the backup folder after verifying the upgrade if desired.
 
-Schema version 1 releases cannot open a schema version 2 database. To roll back to the earlier SQLite release, stop the server and restore its pre-upgrade SQLite backup into a separate empty volume. This loses changes made after the backup; do not run either release against the other schema.
+Schema version 2 databases gain nullable profile creation and last-sync timestamps and a table of deleted profile IDs (schema version 3) on startup; existing profiles keep their data; their creation time stays unknown and their last sync time is recorded on their next sync. Older releases cannot open a newer schema version. To roll back to the earlier SQLite release, stop the server and restore its pre-upgrade SQLite backup into a separate empty volume. This loses changes made after the backup; do not run either release against the other schema.
 
 To roll back to a JSON-based release, stop the server and restore the **pre-upgrade JSON backup into a separate empty volume** before starting the old release. The JSON files in `migration-backup` represent the moment of migration; rolling back this way loses later SQLite changes. To preserve later changes, stay on the SQLite release and restore a stopped-server SQLite backup. Do not run old and new releases against the same data volume.
 
@@ -119,6 +119,24 @@ docker compose up -d
 For a local installation, stop the server and run `node apps/api/dist/provision-user.js 'Alice'` after building. The name is optional. Provisioning uses the configured data directory and persistent quotas, writes a private SQLite profile record, and prints its UUID; keep it private. There is no HTTP provisioning endpoint.
 
 **Existing deployments:** explicit `.env` values continue to apply. To enable public registration, change `DISABLE_USER_CREATION=true` to `false` and restart or recreate the server. To close public registration, set `DISABLE_USER_CREATION=true`; existing profiles and saved IDs continue to work. Public registration permits anyone with network access to create profiles and consume the shared profile/storage quotas; rate limits only slow this down. Use public registration only on a trusted network or behind an access-controlled proxy.
+
+## Admin page
+
+Set `ADMIN_PASSWORD_HASH` to enable a hidden operator page at `/admin`. The app does not link to it. Generate the hash with the built image (it does not touch the data and the server may keep running):
+
+```bash
+docker compose run --rm --no-deps machbar node api/dist/hash-admin-password.js
+```
+
+For a local installation, run `node apps/api/dist/hash-admin-password.js` after building. The command reads the password from the terminal without echo and asks for it twice; with piped input it reads the first line, for example `printf '%s\n' "$PASSWORD" | node apps/api/dist/hash-admin-password.js`. Passwords shorter than `ADMIN_PASSWORD_MIN_LENGTH` characters (default 12, 1–1024) are rejected; with Compose the value is taken from `.env`. It prints a scrypt hash in the form `scrypt:<log2 N>:<r>:<p>:<salt>:<key>` (N = 2^15, r = 8, p = 1, a random 16-byte salt and a 32-byte key, base64url). Startup rejects a malformed hash, cost parameters outside N = 2^14–2^20, r = 8–16, p = 1–4, and the former plain-text `ADMIN_PASSWORD` variable. It shows a password form; a successful sign-in sets an HttpOnly, `SameSite=Strict` session cookie scoped to `/admin` (marked `Secure` when `APP_URL` uses HTTPS), so serve it over HTTPS outside a trusted network. Sessions are kept in server memory and end after 12 hours, on **Sign out**, or when the server restarts. Ten failed logins per IP within the rate-limit window return 429 until the window expires. Without the hash, `/admin` is not served.
+
+While `DISABLE_USER_CREATION=true`, the **User creation** panel opens public profile creation for 15 minutes, 1 hour, or 24 hours, and can extend or close that window early. The window is kept in server memory, so a restart closes it again; `DISABLE_USER_CREATION` itself is never changed. While it is open, bootstrap and first sync behave as if `DISABLE_USER_CREATION=false`, including the new-user rate limit and the profile quota. With `DISABLE_USER_CREATION=false`, the panel only shows that creation is open to everyone.
+
+The **Light**, **Dark**, and **System** buttons choose the page's color scheme; the choice is kept in a `machbar_admin_theme` cookie scoped to `/admin` and also applies to the login form. **System** follows the operating system setting.
+
+The page lists every saved profile with its avatar, name, language, timezone, task counts, check-ins, push devices, revision, stored size, creation time, last sync (the last saved change), and latest check-in. Profiles saved before schema version 3 show an unknown creation time, and an unknown last sync until they next sync. Profiles cannot be edited. **Delete** asks for confirmation, then permanently removes the profile, all of its data, and its push subscriptions, and blocks its ID. Take a backup first if you might need the data again.
+
+Deleted profile IDs are blocked permanently: the server keeps a small record of each deleted ID and rejects it with `PROFILE_DELETED` (410), so a device that still holds the profile locally cannot upload it again. When the app sees this, it discards its local copy and offers to start a new profile or switch to another existing ID. The page header shows how many IDs are blocked.
 
 Relative data/web paths resolve from the repository root so development and production share the same local data directory.
 

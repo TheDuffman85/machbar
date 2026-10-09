@@ -72,15 +72,6 @@ importers:
 
   apps/web:
     dependencies:
-      '@dicebear/avataaars':
-        specifier: ^9.4.2
-        version: 9.4.2(@dicebear/core@9.4.3)
-      '@dicebear/bottts':
-        specifier: ^9.4.2
-        version: 9.4.2(@dicebear/core@9.4.3)
-      '@dicebear/core':
-        specifier: ^9.4.3
-        version: 9.4.3
       '@machbar/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -154,6 +145,15 @@ importers:
 
   packages/shared:
     dependencies:
+      '@dicebear/avataaars':
+        specifier: ^9.4.2
+        version: 9.4.2(@dicebear/core@9.4.3)
+      '@dicebear/bottts':
+        specifier: ^9.4.2
+        version: 9.4.2(@dicebear/core@9.4.3)
+      '@dicebear/core':
+        specifier: ^9.4.3
+        version: 9.4.3
       zod:
         specifier: ^4.6.5
         version: 4.6.5

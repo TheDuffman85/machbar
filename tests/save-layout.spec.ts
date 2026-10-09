@@ -15,14 +15,18 @@ test.beforeEach(async ({ request, page }) => {
   await readSnapshot(page);
 });
 
+// Holds uploads until released. `started` resolves once an upload is in flight.
 async function holdSync(page: Page) {
   let release!: () => void;
+  let start!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
+  const started = new Promise<void>((resolve) => (start = resolve));
   await page.route('**/api/sync', async (route) => {
+    start();
     await held;
     await route.continue();
   });
-  return release;
+  return { release, started };
 }
 
 async function position(page: Page) {
@@ -44,15 +48,16 @@ for (const scrolled of [false, true]) {
     else await page.evaluate(() => window.scrollTo(0, 0));
     const before = await position(page);
     if (scrolled) expect(before.scroll).toBeGreaterThan(0);
-    const release = await holdSync(page);
+    const { release, started } = await holdSync(page);
     try {
       // Dispatch without Playwright scrolling the control into view.
       await dark.dispatchEvent('click');
-      await expect(page.getByText('Syncing your changes…', { exact: true })).toBeVisible();
+      await started;
+      // Sync runs in the background without inserting a notice above the page.
+      await expect(page.locator('.notifications .notice')).toHaveCount(0);
       expect(await position(page)).toEqual(before);
       release();
       await readSnapshot(page);
-      await expect(page.getByText('Syncing your changes…', { exact: true })).toHaveCount(0);
       expect(await position(page)).toEqual(before);
     } finally {
       release();
@@ -60,7 +65,7 @@ for (const scrolled of [false, true]) {
   });
 }
 
-test('checkoffs keep the page in place and show sync status without a toast', async ({ page }) => {
+test('checkoffs keep the page in place and sync without a notice or toast', async ({ page }) => {
   await page.locator('nav:visible').getByRole('link', { name: 'Habits', exact: true }).click();
   await page.getByRole('button', { name: 'Add a habit', exact: true }).first().click();
   await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Take a walk');
@@ -71,12 +76,13 @@ test('checkoffs keep the page in place and show sync status without a toast', as
   const complete = page.getByRole('button', { name: 'Complete Take a walk', exact: true });
   await complete.scrollIntoViewIfNeeded();
   const before = await position(page);
-  const release = await holdSync(page);
+  const { release, started } = await holdSync(page);
   try {
     await complete.click();
-    const sync = page.locator('.notice').filter({ hasText: 'Syncing your changes…' });
+    await started;
+    const notice = page.locator('.notifications .notice');
     const toast = page.locator('.toast');
-    await expect(sync).toBeVisible();
+    await expect(notice).toHaveCount(0);
     await expect(toast).toHaveCount(0);
     expect((await position(page)).top).toBe(before.top);
     await page.screenshot({
@@ -84,7 +90,7 @@ test('checkoffs keep the page in place and show sync status without a toast', as
     });
     release();
     await readSnapshot(page);
-    await expect(sync).toHaveCount(0);
+    await expect(notice).toHaveCount(0);
     expect((await position(page)).top).toBe(before.top);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       page.viewportSize()!.width,

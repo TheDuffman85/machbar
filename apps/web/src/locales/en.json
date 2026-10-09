@@ -154,6 +154,8 @@
   },
   "selectUserHelp": "Enter an existing user ID or scan its QR code to open your profile.",
   "USER_CREATION_DISABLED": "New profiles are disabled. Use an existing profile to continue.",
+  "PROFILE_DELETED": "This profile was deleted by the server administrator and its data is no longer available. Start a new profile or use another existing one.",
+  "startNewProfile": "Start a new profile",
   "DOCUMENT_LIMIT": "This profile has reached its size limit. Remove unused items before syncing.",
   "PROFILE_LIMIT": "This server has reached its profile limit. Contact its administrator.",
   "STORAGE_LIMIT": "This server has reached its storage limit. Contact its administrator.",

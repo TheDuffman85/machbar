@@ -1,3 +1,4 @@
+import { dismissedHints } from './setup-hints.js';
 import { expect, test, type Page } from '@playwright/test';
 
 async function swipeUp(page: Page) {
@@ -60,7 +61,7 @@ test('closing onboarding and avatar dialogs together releases page scrolling', a
   context,
   browser,
 }) => {
-  const otherContext = await browser.newContext({ locale: 'en-US' });
+  const otherContext = await browser.newContext({ locale: 'en-US', storageState: dismissedHints });
   try {
     const other = await otherContext.newPage();
     await other.goto('http://localhost:3100');

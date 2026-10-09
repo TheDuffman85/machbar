@@ -1,3 +1,4 @@
+import { dismissedHints } from './setup-hints.js';
 import { expect, test, type Page } from '@playwright/test';
 import { createServer } from 'node:http';
 import { readSnapshot } from './helpers.js';
@@ -69,7 +70,10 @@ for (const switchProfile of [false, true]) {
     expect(await page.evaluate(() => localStorage.getItem('machbar-user-id'))).toBe(id);
 
     if (switchProfile) {
-      const other = await browser.newContext({ baseURL: 'http://localhost:3100' });
+      const other = await browser.newContext({
+        baseURL: 'http://localhost:3100',
+        storageState: dismissedHints,
+      });
       try {
         id = await onboard(await other.newPage(), 'Bob');
         name = 'Bob';
@@ -87,7 +91,10 @@ for (const switchProfile of [false, true]) {
     expect(cookies.some((cookie) => cookie.name === 'machbar-user-id')).toBe(false);
 
     // Model an older iOS installation that already copied the legacy cookie.
-    const installed = await browser.newContext({ baseURL: 'http://localhost:3100' });
+    const installed = await browser.newContext({
+      baseURL: 'http://localhost:3100',
+      storageState: dismissedHints,
+    });
     try {
       await installed.addCookies([
         {
@@ -132,7 +139,10 @@ test('a new PWA restores its profile through Switch User without copying an acce
 }) => {
   const id = await onboard(page, 'Alice');
   expect((await context.cookies()).some((cookie) => cookie.name === 'machbar-user-id')).toBe(false);
-  const installed = await browser.newContext({ baseURL: 'http://localhost:3100' });
+  const installed = await browser.newContext({
+    baseURL: 'http://localhost:3100',
+    storageState: dismissedHints,
+  });
   try {
     const app = await installed.newPage();
     await app.goto('/');

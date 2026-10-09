@@ -34,6 +34,10 @@ export class SqliteStore {
     this.validateId(userId);
     return (await this.budget.database.read('profile', userId)) !== undefined;
   }
+  async deleted(userId: string): Promise<boolean> {
+    this.validateId(userId);
+    return this.budget.database.deleted(userId);
+  }
   private validateId(userId: string) {
     if (!localUserIdSchema.safeParse(userId).success)
       throw new DomainError('INVALID_IDENTITY', 400);
@@ -56,6 +60,7 @@ export class SqliteStore {
     this.validateId(userId);
     const raw = await this.budget.database.read('profile', userId);
     if (raw === undefined) {
+      if (await this.budget.database.deleted(userId)) throw new DomainError('PROFILE_DELETED', 410);
       if (requireExisting) throw new DomainError('USER_NOT_FOUND', 404);
       if (!allowCreate) throw new DomainError('USER_CREATION_DISABLED', 403);
       return createUser(userId);
@@ -89,6 +94,10 @@ export class SqliteStore {
   }
   async readExisting(userId: string): Promise<UserDocument> {
     return this.serial(userId, () => this.load(userId, true));
+  }
+  async remove(userId: string): Promise<boolean> {
+    this.validateId(userId);
+    return this.serial(userId, () => this.budget.removeProfile(userId));
   }
   async update<T>(
     userId: string,

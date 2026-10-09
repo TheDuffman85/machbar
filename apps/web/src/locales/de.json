@@ -154,6 +154,8 @@
   },
   "selectUserHelp": "Gib eine bestehende Benutzer-ID ein oder scanne ihren QR-Code, um dein Profil zu öffnen.",
   "USER_CREATION_DISABLED": "Neue Profile sind deaktiviert. Nutze ein bestehendes Profil, um fortzufahren.",
+  "PROFILE_DELETED": "Dieses Profil wurde vom Serveradministrator gelöscht, seine Daten sind nicht mehr verfügbar. Starte ein neues Profil oder nutze ein anderes bestehendes.",
+  "startNewProfile": "Neues Profil starten",
   "DOCUMENT_LIMIT": "Dieses Profil hat seine Größenbegrenzung erreicht. Entferne ungenutzte Einträge vor der Synchronisierung.",
   "PROFILE_LIMIT": "Der Server hat seine Profilbegrenzung erreicht. Wende dich an den Administrator.",
   "STORAGE_LIMIT": "Der Server hat seine Speicherbegrenzung erreicht. Wende dich an den Administrator.",

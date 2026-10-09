@@ -208,6 +208,16 @@ function removeBinding(state: State, id: string) {
     if (key.startsWith(`${id}:`)) delete state.dispatches[key];
 }
 
+export function removeUserBindings(push: PushStore, userId: string) {
+  return push.access(
+    (state) => {
+      const ids = state.bindings.filter((b) => b.userId === userId).map((b) => b.id);
+      for (const id of ids) removeBinding(state, id);
+      return ids.length > 0;
+    },
+    (removed) => removed,
+  );
+}
 export type NotificationOptions = {
   send?: PushSender;
   validate?: EndpointValidator;
@@ -341,4 +351,5 @@ export function registerNotifications(
       await scheduler.stop();
     });
   }
+  return push;
 }

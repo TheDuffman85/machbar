@@ -36,6 +36,12 @@ export class StorageBudget {
         db.exec('BEGIN IMMEDIATE');
         try {
           const previous = readRecord(db, kind, key);
+          if (
+            kind === 'profile' &&
+            previous === undefined &&
+            db.prepare('SELECT 1 FROM deleted_profiles WHERE user_id = ?').get(key)
+          )
+            throw new DomainError('PROFILE_DELETED', 410);
           validate?.(previous);
           const size = recordBytes(db, kind, key);
           // A shrinking document still journals the larger previous payload.
@@ -63,6 +69,33 @@ export class StorageBudget {
             throw new DomainError('STORAGE_LIMIT', 507);
           writeRecord(db, kind, key, contents);
           db.exec('COMMIT');
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
+      });
+    this.queue = next;
+    return next;
+  }
+  // Deletes a profile in the write queue, so it cannot interleave with a commit.
+  // The tombstone commits with the deletion and blocks recreating the profile.
+  async removeProfile(userId: string): Promise<boolean> {
+    const next = this.queue
+      .catch(() => {})
+      .then(async () => {
+        const db = await this.database.ready();
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          // Remove referring rows before their targets, as profile writes do.
+          for (const table of ['completions', 'gifts', 'operations', 'habits', 'goals'])
+            db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).run(userId);
+          const { changes } = db.prepare('DELETE FROM profiles WHERE user_id = ?').run(userId);
+          if (changes > 0)
+            db.prepare(
+              'INSERT OR IGNORE INTO deleted_profiles (user_id, deleted_at) VALUES (?, ?)',
+            ).run(userId, new Date().toISOString());
+          db.exec('COMMIT');
+          return changes > 0;
         } catch (error) {
           db.exec('ROLLBACK');
           throw error;

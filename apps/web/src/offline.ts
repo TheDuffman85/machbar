@@ -260,6 +260,14 @@ export function syncEntry(): Promise<Entry> {
     uploaded: false,
   };
   const run = async () => {
+    try {
+      return await attemptSync();
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'PROFILE_DELETED') await forgetProfile(id);
+      throw error;
+    }
+  };
+  const attemptSync = async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
       const captured = await readEntry(id);
       if (!captured) return loadEntry();
@@ -335,6 +343,26 @@ export function syncEntry(): Promise<Entry> {
     });
   syncing.set(id, promise);
   return promise;
+}
+// An administrator deleted this profile on the server and its ID is blocked.
+// Drop the local copy so pending changes are not retried; the app then shows
+// the deletion and offers a new profile.
+async function forgetProfile(id: string) {
+  await transact(
+    'accounts',
+    'readwrite',
+    (tx) => tx.store.delete(id),
+    () => channel?.postMessage(id),
+  );
+}
+export async function startNewProfile(): Promise<void> {
+  const id = getLocalUserId();
+  if ((await readEntry(id))?.queue.length) throw new ApiError('PENDING_CHANGES', 409);
+  const { disableDeviceNotifications } = await import('./notifications');
+  await disableDeviceNotifications(id);
+  const next = newId();
+  setLocalUserId(next);
+  channel?.postMessage(next);
 }
 export function visibleSnapshot(entry: Entry) {
   return bootstrapFor(entry.snapshot);

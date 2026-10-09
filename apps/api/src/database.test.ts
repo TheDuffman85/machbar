@@ -557,7 +557,7 @@ describe('normalized SQLite schema', () => {
     const first = stores({ maxProfiles: 1, maxStorageBytes: 1 });
     expect(await first.profiles.readExisting(doc.userId)).toEqual(doc);
     expect(await first.push.access((state) => state)).toEqual(push);
-    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(2);
+    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(3);
     expect(
       inspect((db) => db.prepare("SELECT name FROM sqlite_master WHERE name = 'records'").get()),
     ).toBeUndefined();
@@ -583,6 +583,29 @@ describe('normalized SQLite schema', () => {
     doc.revision++;
     expect(await second.profiles.readExisting(doc.userId)).toEqual(doc);
     expect(await second.push.access((state) => state)).toEqual(push);
+  });
+
+  it('upgrades version 2 with unknown creation and sync times and deletion tombstones', async () => {
+    const doc = richProfile();
+    const first = stores();
+    await first.budget.commit('profile', doc.userId, JSON.stringify(doc));
+    await first.budget.close();
+    inspect((db) =>
+      db.exec(`ALTER TABLE profiles DROP COLUMN created_at;
+        ALTER TABLE profiles DROP COLUMN updated_at; DROP TABLE deleted_profiles;
+        PRAGMA user_version = 2;`),
+    );
+    const second = stores();
+    expect(await second.profiles.readExisting(doc.userId)).toEqual(doc);
+    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(3);
+    expect(inspect((db) => db.prepare('SELECT * FROM deleted_profiles').all())).toEqual([]);
+    expect(
+      inspect((db) => ({ ...db.prepare('SELECT created_at, updated_at FROM profiles').get() })),
+    ).toEqual({ created_at: null, updated_at: null });
+    await second.profiles.update(doc.userId, () => {});
+    const times = inspect((db) => db.prepare('SELECT created_at, updated_at FROM profiles').get()!);
+    expect(times.created_at).toBeNull();
+    expect(typeof times.updated_at).toBe('string');
   });
 
   it.each([undefined, null, {}, { mouth: 'smile' } as const])(

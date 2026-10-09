@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { dismissedHints } from './tests/setup-hints.js';
 
 const chromiumLaunchOptions = {
   executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
@@ -17,6 +18,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     locale: 'en-US',
+    storageState: dismissedHints,
   },
   projects: [
     {

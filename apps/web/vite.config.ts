@@ -64,6 +64,7 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': { target: 'http://127.0.0.1:3000', changeOrigin: false },
         '/health': { target: 'http://127.0.0.1:3000', changeOrigin: false },
+        '^/admin([/?]|$)': { target: 'http://127.0.0.1:3000', changeOrigin: false },
       },
     },
   };

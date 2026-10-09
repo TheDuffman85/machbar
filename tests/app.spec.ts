@@ -1,3 +1,4 @@
+import { dismissedHints } from './setup-hints.js';
 import { localEntry, readSnapshot, writeSnapshot } from './helpers.js';
 import { expect, test, type Page } from '@playwright/test';
 import { AxeBuilder } from '@axe-core/playwright';
@@ -703,13 +704,16 @@ test('sync errors preserve locally archived data and stay in the background', as
   await page.route('**/api/sync', (route) =>
     route.fulfill({ status: 500, json: { code: 'INTERNAL_ERROR' } }),
   );
+  const failedSync = page.waitForResponse(
+    (response) => response.url().endsWith('/api/sync') && response.status() === 500,
+  );
   await page.getByRole('button', { name: 'Archive Take a little walk', exact: true }).click();
   await page
     .getByRole('dialog', { name: 'Archive', exact: true })
     .getByRole('button', { name: 'Archive', exact: true })
     .click();
+  await failedSync;
   const alert = page.getByRole('alertdialog', { name: 'Something needs your attention' });
-  await expect(page.getByRole('button', { name: 'Sync now', exact: true })).toBeEnabled();
   await expect(alert).toHaveCount(0);
   await expect(
     page.getByRole('button', { name: 'Archive Take a little walk', exact: true }),
@@ -717,6 +721,8 @@ test('sync errors preserve locally archived data and stay in the background', as
   expect((await localEntry(page)).snapshot.document.habits[0].archivedAt).not.toBeNull();
   expect((await localEntry(page)).queue.length).toBeGreaterThan(0);
   await page.unroute('**/api/sync');
+  // Manual sync now lives on the sync log page.
+  await page.goto('/settings/sync-log');
   await page.getByRole('button', { name: 'Sync now', exact: true }).click();
   expect((await readSnapshot(page)).document.habits[0].archivedAt).not.toBeNull();
 });
@@ -729,14 +735,14 @@ test('offline reload preserves queued checkoffs and reconnect syncs exactly once
   await serviceWorker(page);
   await context.setOffline(true);
   await page.getByRole('button', { name: 'Complete Take a little walk', exact: true }).click();
-  await expect(page.getByText('Pending sync', { exact: true })).toBeVisible();
+  await expect.poll(async () => (await localEntry(page)).queue.length).toBe(1);
   await page.reload();
   await expect(
     page.getByRole('button', { name: 'Undo Take a little walk', exact: true }),
   ).toBeVisible();
   await context.setOffline(false);
   await serverXp(page, 10);
-  await expect(page.getByText('Pending sync', { exact: true })).toHaveCount(0);
+  expect((await localEntry(page)).queue).toHaveLength(0);
   await page.getByRole('button', { name: 'Undo Take a little walk', exact: true }).click();
   await serverXp(page, 0);
 });
@@ -970,7 +976,7 @@ test('profile changes preserve pending checkoffs without replaying them into ano
   await onboard(page, 'Alice');
   await addHabit(page, 'Alice habit');
   const alice = (await readSnapshot(page)).document.userId;
-  const otherContext = await browser.newContext({ locale: 'en-US' });
+  const otherContext = await browser.newContext({ locale: 'en-US', storageState: dismissedHints });
   let bob: string;
   try {
     const other = await otherContext.newPage();
@@ -992,7 +998,7 @@ test('profile changes preserve pending checkoffs without replaying them into ano
   await serviceWorker(page);
   await context.setOffline(true);
   await page.getByRole('button', { name: 'Complete Alice habit', exact: true }).click();
-  await expect(page.getByText('Pending sync', { exact: true })).toBeVisible();
+  await expect.poll(async () => (await localEntry(page)).queue.length).toBe(1);
   // Simulate a profile selection in another tab while this profile has unsynced checkoffs.
   await page.evaluate((id) => localStorage.setItem('machbar-user-id', id), bob);
   await page.reload();

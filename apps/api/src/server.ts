@@ -15,6 +15,8 @@ import { registerIdentity } from './identity.js';
 import { registerRateLimits } from './rate-limit.js';
 import { isApiRequest } from './api-request.js';
 import { registerNotifications, type NotificationOptions } from './notifications.js';
+import { adminPostRoutes, registerAdmin } from './admin.js';
+import { UserCreation } from './user-creation.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -30,10 +32,12 @@ export async function buildServer(
     store?: SqliteStore;
     logger?: boolean;
     notifications?: NotificationOptions;
+    userCreation?: UserCreation;
   } = {},
 ) {
   const config = options.config ?? readConfig();
   const budget = new StorageBudget(config.dataDir, config);
+  const userCreation = options.userCreation ?? new UserCreation(config);
   const store = options.store ?? new SqliteStore(config.dataDir, budget);
   await store.useBudget(budget);
   await store.ready();
@@ -92,7 +96,11 @@ export async function buildServer(
   app.addHook('onRequest', async (request, reply) => {
     // Only API routes accept bodies. Reject other methods before Fastify reads
     // or parses them, including OPTIONS and unknown static/health paths.
-    if (!isApiRequest(request) && !['GET', 'HEAD'].includes(request.method))
+    if (
+      !isApiRequest(request) &&
+      !['GET', 'HEAD'].includes(request.method) &&
+      !(request.method === 'POST' && adminPostRoutes.has(request.routeOptions.url ?? ''))
+    )
       return reply.code(404).send({ code: 'NOT_FOUND' });
   });
   const admitUser = registerRateLimits(app, config);
@@ -148,7 +156,8 @@ export async function buildServer(
       return runApiWork(request, () => handler.call(this, request, reply));
     };
   });
-  registerNotifications(app, config, store, options.notifications, budget);
+  const push = registerNotifications(app, config, store, options.notifications, budget);
+  registerAdmin(app, config, store, budget.database, push, userCreation);
   const bootstrap = (document: Awaited<ReturnType<SqliteStore['read']>>) => ({
     document,
     dailyHistoryDays: config.dailyHistoryDays,
@@ -166,7 +175,8 @@ export async function buildServer(
     await runApiWork(request, async () => {
       revision(request.headers);
       if (!(await store.exists(request.userId))) {
-        if (config.disableUserCreation) throw new DomainError('USER_CREATION_DISABLED', 403);
+        if (await store.deleted(request.userId)) throw new DomainError('PROFILE_DELETED', 410);
+        if (!userCreation.allowed()) throw new DomainError('USER_CREATION_DISABLED', 403);
         if (!admitUser(request.ip))
           return reply
             .code(429)
@@ -178,7 +188,7 @@ export async function buildServer(
   });
   app.get('/health', async () => ({ status: 'ok' }));
   app.get('/api/bootstrap', async (request) =>
-    bootstrap(await store.read(request.userId, !config.disableUserCreation)),
+    bootstrap(await store.read(request.userId, userCreation.allowed())),
   );
   app.post('/api/local-user', async (request) => {
     const { userId } = z.object({ userId: localUserIdSchema }).strict().parse(request.body);
@@ -199,7 +209,7 @@ export async function buildServer(
         Object.assign(doc, syncDocumentSchema.parse(request.body));
       },
       expectedRevision,
-      !config.disableUserCreation,
+      userCreation.allowed(),
     );
     return bootstrap(result.document);
   });

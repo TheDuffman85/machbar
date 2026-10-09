@@ -7,6 +7,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
+    },
+    "./avatar-image": {
+      "types": "./src/avatar-image.ts",
+      "import": "./dist/avatar-image.js"
     }
   },
   "scripts": {
@@ -15,6 +19,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dicebear/avataaars": "^9.4.2",
+    "@dicebear/bottts": "^9.4.2",
+    "@dicebear/core": "^9.4.3",
     "zod": "^4.6.5"
   }
 }

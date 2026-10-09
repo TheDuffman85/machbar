@@ -177,7 +177,14 @@ export function recordBytes(db: DatabaseSync, kind: RecordKind, key: string): nu
 
 // Logical payload bytes are a quota cache, maintained in the same transaction as
 // relational data. Imports retain their original byte charge, including whitespace.
-export function writeRecord(db: DatabaseSync, kind: RecordKind, key: string, contents: string) {
+// Imports pass a null write time because their creation and sync times are unknown.
+export function writeRecord(
+  db: DatabaseSync,
+  kind: RecordKind,
+  key: string,
+  contents: string,
+  writtenAt: string | null = new Date().toISOString(),
+) {
   const bytes = Buffer.byteLength(contents);
   if (kind === 'push') {
     if (key !== '') throw new Error('Invalid push record key');
@@ -185,7 +192,7 @@ export function writeRecord(db: DatabaseSync, kind: RecordKind, key: string, con
   } else {
     const doc = userDocumentSchema.parse(JSON.parse(contents));
     if (doc.userId !== key) throw new Error('Profile ID does not match record key');
-    writeProfile(db, doc, bytes);
+    writeProfile(db, doc, bytes, writtenAt);
   }
 }
 function inserter(db: DatabaseSync) {
@@ -202,15 +209,22 @@ function inserter(db: DatabaseSync) {
     statement.run(...Object.values(row));
   };
 }
-function writeProfile(db: DatabaseSync, doc: UserDocument, bytes: number) {
+function writeProfile(
+  db: DatabaseSync,
+  doc: UserDocument,
+  bytes: number,
+  writtenAt: string | null,
+) {
   const p = doc.preferences;
   db.prepare(
     `INSERT INTO profiles (user_id, revision, name, language, theme, timezone,
-    avatar_seed, avatar_mode, onboarded, logical_bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    avatar_seed, avatar_mode, onboarded, logical_bytes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (user_id) DO UPDATE SET revision = excluded.revision, name = excluded.name,
     language = excluded.language, theme = excluded.theme, timezone = excluded.timezone,
     avatar_seed = excluded.avatar_seed, avatar_mode = excluded.avatar_mode,
-    onboarded = excluded.onboarded, logical_bytes = excluded.logical_bytes`,
+    onboarded = excluded.onboarded, logical_bytes = excluded.logical_bytes,
+    updated_at = excluded.updated_at`,
   ).run(
     doc.userId,
     doc.revision,
@@ -222,6 +236,8 @@ function writeProfile(db: DatabaseSync, doc: UserDocument, bytes: number) {
     p.avatarOptions === undefined ? 0 : p.avatarOptions === null ? 1 : 2,
     Number(p.onboarded),
     bytes,
+    writtenAt,
+    writtenAt,
   );
   // Remove referring rows before their targets. All deletes and inserts commit
   // together; a failed replacement leaves the previous document intact.

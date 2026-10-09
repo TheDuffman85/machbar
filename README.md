@@ -142,6 +142,24 @@ docker start machbar
 
 The command prints the new profile's private UUID; share it only with that user. Public registration lets anyone with network access consume the shared storage quotas. Keep it on a trusted network or behind an access-controlled proxy. More details: [profile access and provisioning](docs/deployment.md#browser-profiles).
 
+### Optional admin page
+
+Set `ADMIN_PASSWORD_HASH` in `.env` to enable a hidden operator page at `/admin`, protected by a password form. The password itself is never stored; generate its hash with the built image and paste the printed line into `.env`:
+
+```bash
+docker compose run --rm --no-deps machbar node api/dist/hash-admin-password.js
+```
+
+For standalone Docker, run `docker run --rm -it machbar:local node api/dist/hash-admin-password.js`; for a local build, `node apps/api/dist/hash-admin-password.js`. The command asks for the password twice without echoing it (at least 12 characters, or `ADMIN_PASSWORD_MIN_LENGTH`) and prints a hash such as `scrypt:15:8:1:<salt>:<key>`:
+
+```dotenv
+ADMIN_PASSWORD_HASH=scrypt:15:8:1:<salt>:<key>
+```
+
+The hash contains no `$`, so it can be pasted unquoted. To change the password, generate a new hash and recreate the container. The app does not link to the page, and it is not served while the hash is empty. Use HTTPS outside a trusted network, so the password and session cookie are not sent in clear text. Repeated failed logins from one IP are rate-limited. A sign-in lasts 12 hours, until **Sign out**, or until the server restarts.
+
+The page lists every profile with its avatar, stats, creation time, last sync, and latest check-in. While `DISABLE_USER_CREATION=true`, **User creation** can open public profile creation for 15 minutes, 1 hour, or 24 hours, for example so a new user can sign up on their own device; it closes at the end of that time, on **Close now**, or when the server restarts. The **Light**, **Dark**, and **System** buttons switch the page's appearance and are remembered in this browser. **Delete** asks for confirmation, then permanently removes the profile, its data, and its push subscriptions. The deleted ID is blocked, so devices that still hold the profile cannot upload it again; they discard their local copy and offer to start a new profile or switch to another ID. Take a backup first if you might need the data again. See the [admin page reference](docs/deployment.md#admin-page).
+
 ### Storage and request limits
 
 | Variable                    | Default               | Purpose                                                   |
@@ -244,7 +262,7 @@ Keep backups private and save `.env` separately, including VAPID keys if enabled
 
 ## Documentation
 
-- [Deployment reference](docs/deployment.md): permissions, profile access, notification delivery, quotas, and restore commands.
+- [Deployment reference](docs/deployment.md): permissions, profile access, the admin page, notification delivery, quotas, and restore commands.
 - [App behavior](docs/app-behavior.md): schedules, progression, offline use, synchronization, and conflict handling.
 - [Development](docs/development.md): Node.js 24.x, pnpm 11.17.0, local setup, workspace structure, and verification commands.
 - [API reference](docs/api.md): routes, identity, revisions, resource limits, and errors.

@@ -59,11 +59,16 @@ export async function flushNotificationRemovals() {
   if (!navigator.onLine) return;
   const state = await deviceNotifications();
   for (const binding of state.pendingRemoval) {
-    await request('/api/notifications/subscription', {
-      method: 'DELETE',
-      headers: { 'X-Machbar-User': binding.userId },
-      body: JSON.stringify({ bindingId: binding.bindingId }),
-    });
+    try {
+      await request('/api/notifications/subscription', {
+        method: 'DELETE',
+        headers: { 'X-Machbar-User': binding.userId },
+        body: JSON.stringify({ bindingId: binding.bindingId }),
+      });
+    } catch (error) {
+      // Deleting a profile on the server also removed its subscriptions.
+      if (!(error instanceof ApiError && error.code === 'PROFILE_DELETED')) throw error;
+    }
     await updateDeviceNotifications((state) => {
       state.pendingRemoval = state.pendingRemoval.filter((b) => b.bindingId !== binding.bindingId);
     });

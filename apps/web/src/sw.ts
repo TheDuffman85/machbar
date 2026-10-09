@@ -16,7 +16,7 @@ cleanupOutdatedCaches();
 clientsClaim();
 registerRoute(
   new NavigationRoute(createHandlerBoundToURL('/index.html'), {
-    denylist: [/^\/api\//, /^\/auth\//, /^\/health/],
+    denylist: [/^\/api\//, /^\/auth\//, /^\/health/, /^\/admin([/?]|$)/],
   }),
 );
 self.addEventListener('message', (event) => {
