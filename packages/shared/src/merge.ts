@@ -208,7 +208,23 @@ export function mergeDocuments(
     }),
     removed('goals'),
   );
-  result.gifts = entities(base.gifts, local.gifts, server.gifts, fields, removed('gifts'));
+  result.gifts = entities(
+    base.gifts,
+    local.gifts,
+    server.gifts,
+    (b, l, s) => {
+      // Keep each unlock rule together so concurrent edits cannot pair a goal
+      // type with a habit ID or carry a threshold from a different milestone.
+      const milestone = (gift: typeof b) =>
+        gift && {
+          targetType: gift.targetType,
+          targetId: gift.targetId,
+          threshold: gift.threshold,
+        };
+      return { ...fields(b, l, s), ...pick(milestone(b), milestone(l), milestone(s)) };
+    },
+    removed('gifts'),
+  );
   const targetIds = new Set([...result.habits, ...result.goals].map((item) => item.id));
   result.gifts = result.gifts.filter((gift) => targetIds.has(gift.targetId));
   const stepIds = new Set(result.goals.flatMap((g) => g.steps.map((s) => s.id)));

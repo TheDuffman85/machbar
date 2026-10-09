@@ -1,5 +1,13 @@
 import {
   Bike,
+  Gift,
+  ShoppingBag,
+  Cake,
+  Ticket,
+  Plane,
+  Utensils,
+  Headphones,
+  Gamepad2,
   BookOpen,
   Briefcase,
   Coffee,
@@ -21,6 +29,14 @@ import { iconChoices, type EntityIcon as IconName } from '@machbar/shared';
 import { useTranslation } from 'react-i18next';
 
 const icons: Record<IconName, LucideIcon> = {
+  gift: Gift,
+  shoppingBag: ShoppingBag,
+  cake: Cake,
+  ticket: Ticket,
+  plane: Plane,
+  utensils: Utensils,
+  headphones: Headphones,
+  gamepad: Gamepad2,
   leaf: Leaf,
   target: Target,
   heart: Heart,
@@ -48,17 +64,19 @@ export function IconPicker({
   value,
   color,
   onChange,
+  choices = iconChoices,
 }: {
   value: IconName;
   color: string;
   onChange: (icon: IconName) => void;
+  choices?: readonly IconName[];
 }) {
   const { t } = useTranslation();
   return (
     <fieldset>
       <legend>{t('icon')}</legend>
       <div className="icon-options">
-        {iconChoices.map((name) => (
+        {choices.map((name) => (
           <button
             key={name}
             type="button"

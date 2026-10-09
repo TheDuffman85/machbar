@@ -1,4 +1,5 @@
 import {
+  Fragment,
   createContext,
   useContext,
   useEffect,
@@ -72,6 +73,7 @@ import {
   scheduleChangeDate,
   type HabitSchedule,
   type EntityIcon as IconName,
+  giftIconChoices,
   type Recurrence,
   localDate,
   scheduled,
@@ -115,7 +117,7 @@ type ModalState =
   | { kind: 'habit'; habit?: Habit }
   | { kind: 'goal'; goal?: Goal }
   | { kind: 'step'; goal: Goal; step?: Step }
-  | { kind: 'gift' }
+  | { kind: 'gift'; gift?: Gift }
   | { kind: 'install' }
   | {
       kind: 'avatar';
@@ -1009,7 +1011,9 @@ export function App() {
                           : modal.kind === 'avatar'
                             ? 'editAvatar'
                             : modal.kind === 'gift'
-                              ? 'newGift'
+                              ? modal.gift
+                                ? 'editGift'
+                                : 'newGift'
                               : 'installTitle',
                   )
             }
@@ -1703,7 +1707,11 @@ function DayGiftCard() {
           <span className="small-label">
             {t(next.state === 'available' ? 'available' : 'nextGift')}
           </span>
-          <h4>{next.gift.title}</h4>
+          <h4 className="day-gift-title">
+            <EntityIcon name={next.gift.icon ?? 'gift'} size={20} />
+            {next.gift.title}
+          </h4>
+          <GiftDetails description={next.gift.description} />
           {next.state === 'available' ? (
             <>
               <p>{t('dayGiftUnlocked')}</p>
@@ -1785,7 +1793,11 @@ function DayGiftCard() {
       ) : latest ? (
         <>
           <span className="small-label">{t('dayGiftLatest')}</span>
-          <h4>{latest.title}</h4>
+          <h4 className="day-gift-title">
+            <EntityIcon name={latest.icon ?? 'gift'} size={20} />
+            {latest.title}
+          </h4>
+          <GiftDetails description={latest.description} />
           <p className="day-gift-enjoyed">
             <CircleCheck size={15} aria-hidden="true" />
             {t('claimed')} ·{' '}
@@ -2163,11 +2175,32 @@ function giftDescription(
     { name, count: gift.threshold },
   );
 }
+function GiftDetails({ description }: { description?: string }) {
+  if (!description) return null;
+  return (
+    <p className="gift-description">
+      {description.split(/(https?:\/\/[^\s<>]+)/g).map((part, index) => {
+        if (!/^https?:\/\//.test(part)) return part;
+        const url = part.replace(/[.,!?;:]+$/, '');
+        return (
+          <Fragment key={index}>
+            <a href={url} target="_blank" rel="noopener noreferrer">
+              {url}
+            </a>
+            {part.slice(url.length)}
+          </Fragment>
+        );
+      })}
+    </p>
+  );
+}
+
 function Rewards() {
   const { t } = useTranslation();
   const { snapshot, setModal, action, busy, notify } = useApp();
   const { document: doc, progress } = snapshot;
-  const gifts = doc.gifts.filter((g) => !g.archivedAt);
+  const [archived, setArchived] = useState(false);
+  const gifts = doc.gifts.filter((g) => !!g.archivedAt === archived);
   return (
     <>
       <Heading title={t('rewards')} subtitle={t('rewardsSubtitle')}>
@@ -2201,8 +2234,18 @@ function Rewards() {
         </div>
       </div>
       <div className="section-heading">
-        <h2>{t('nextGift')}</h2>
+        <h2>{t(archived ? 'archivedGifts' : 'nextGift')}</h2>
         <GiftIcon size={20} />
+      </div>
+      <div className="list-toolbar">
+        <label className="archive-toggle">
+          <input
+            type="checkbox"
+            checked={archived}
+            onChange={(e) => setArchived(e.target.checked)}
+          />
+          {t('archived')}
+        </label>
       </div>
       <div className="gift-grid">
         {gifts.length ? (
@@ -2212,20 +2255,36 @@ function Rewards() {
               <section className={`panel gift-card ${p.state}`} key={gift.id}>
                 <div className="gift-card-top">
                   <span className="gift-illustration">
-                    <GiftIcon size={29} />
+                    <EntityIcon name={gift.icon ?? 'gift'} size={29} />
                   </span>
-                  <span className={`status-pill ${p.state}`}>
-                    {p.state === 'locked' && <Lock size={12} />}
-                    {t(p.state)}
-                  </span>
+                  <div className="gift-card-tools">
+                    <span className={`status-pill ${p.state}`}>
+                      {p.state === 'locked' && <Lock size={12} />}
+                      {t(archived ? 'archived' : p.state)}
+                    </span>
+                    {!archived && (
+                      <div className="gift-card-actions">
+                        <button
+                          className="icon-button"
+                          aria-label={`${t('edit')} ${gift.title}`}
+                          disabled={busy}
+                          onClick={() => setModal({ kind: 'gift', gift })}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <RemoveItemButton kind="gifts" id={gift.id} title={gift.title} />
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <h3>{gift.title}</h3>
+                <GiftDetails description={gift.description} />
                 <p>{giftDescription(gift, doc, t)}</p>
                 <Bar value={p.current} max={p.target} />
                 <div className="gift-fraction">
                   {Math.min(p.current, p.target)} / {p.target}
                 </div>
-                {p.state === 'available' ? (
+                {p.state === 'available' && !archived ? (
                   <button
                     className="button primary"
                     disabled={busy}
@@ -2255,20 +2314,14 @@ function Rewards() {
                 ) : (
                   <div className="gift encouragement">{t('keepGoing')}</div>
                 )}
-                <RemoveItemButton
-                  kind="gifts"
-                  id={gift.id}
-                  title={gift.title}
-                  className="gift-archive icon-button"
-                />
               </section>
             );
           })
         ) : (
           <div className="panel full-width">
             <Empty
-              title={t('emptyGifts')}
-              description={t('emptyGiftsDescription')}
+              title={t(archived ? 'emptyArchivedGifts' : 'emptyGifts')}
+              description={t(archived ? 'emptyArchivedGiftsDescription' : 'emptyGiftsDescription')}
               icon={GiftIcon}
             />
           </div>
@@ -2699,16 +2752,16 @@ function ChallengeForm({
         ? modal.goal
         : modal.kind === 'step'
           ? modal.step
-          : undefined;
+          : modal.gift;
   const [title, setTitle] = useState(initial?.title ?? ''),
     [description, setDescription] = useState(
-      initial && 'description' in initial ? initial.description : '',
+      initial && 'description' in initial ? (initial.description ?? '') : '',
     );
   const [color, setColor] = useState<(typeof colors)[number]>(
     initial && 'color' in initial ? initial.color : modal.kind === 'goal' ? 'lavender' : 'sage',
   );
   const [icon, setIcon] = useState<IconName>(
-    initial?.icon ?? (modal.kind === 'habit' ? 'leaf' : 'target'),
+    initial?.icon ?? (modal.kind === 'gift' ? 'gift' : modal.kind === 'habit' ? 'leaf' : 'target'),
   );
   const [weekdays, setWeekdays] = useState(
     modal.kind === 'habit' && modal.habit
@@ -2746,21 +2799,27 @@ function ChallengeForm({
   );
   const [date, setDate] = useState(initial && 'date' in initial ? (initial.date ?? '') : '');
   const [targetType, setTargetType] = useState<'goal' | 'habitCount' | 'habitStreak'>(
-    snapshot.document.goals.some((g) => !g.archivedAt) ? 'goal' : 'habitCount',
+    modal.kind === 'gift' && modal.gift
+      ? modal.gift.targetType
+      : snapshot.document.goals.some((g) => !g.archivedAt)
+        ? 'goal'
+        : 'habitCount',
   );
-  const [targetId, setTargetId] = useState(''),
-    [threshold, setThreshold] = useState(7),
+  const [targetId, setTargetId] = useState(
+      modal.kind === 'gift' ? (modal.gift?.targetId ?? '') : '',
+    ),
+    [threshold, setThreshold] = useState(modal.kind === 'gift' ? (modal.gift?.threshold ?? 7) : 7),
     [localError, setLocalError] = useState('');
   const sources = (
     targetType === 'goal' ? snapshot.document.goals : snapshot.document.habits
-  ).filter((item) => !item.archivedAt);
+  ).filter(
+    (item) => !item.archivedAt || (modal.kind === 'gift' && item.id === modal.gift?.targetId),
+  );
   const selectedTarget = targetId || sources[0]?.id || '';
   async function submit(e: FormEvent) {
     e.preventDefault();
     setLocalError('');
-    let path: string,
-      body: unknown,
-      method = 'POST';
+    let path: string, body: unknown, method: string;
     if (modal.kind === 'habit') {
       if (
         (repeat === 'weekdays' && !weekdays.length) ||
@@ -2826,9 +2885,12 @@ function ChallengeForm({
         reminderTime: reminderEnabled ? reminderTime : null,
       };
     } else {
-      path = '/api/gifts';
+      path = `/api/gifts${modal.gift ? `/${modal.gift.id}` : ''}`;
+      method = modal.gift ? 'PATCH' : 'POST';
       body = {
         title,
+        description,
+        icon,
         targetType,
         targetId: selectedTarget,
         threshold: targetType === 'goal' ? 1 : threshold,
@@ -2876,17 +2938,20 @@ function ChallengeForm({
           onChange={(e) => setTitle(e.target.value)}
         />
       </label>
+      {modal.kind !== 'step' && (
+        <label>
+          {t('description')}
+          <textarea
+            maxLength={modal.kind === 'gift' ? 2000 : 500}
+            rows={modal.kind === 'gift' ? 3 : 2}
+            value={description}
+            placeholder={modal.kind === 'gift' ? t('giftDescriptionPlaceholder') : undefined}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </label>
+      )}
       {(modal.kind === 'habit' || modal.kind === 'goal') && (
         <>
-          <label>
-            {t('description')}
-            <textarea
-              maxLength={500}
-              rows={2}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
-          </label>
           <fieldset>
             <legend>{t('color')}</legend>
             <div className="color-options">
@@ -2906,13 +2971,12 @@ function ChallengeForm({
           </fieldset>
         </>
       )}
-      {modal.kind !== 'gift' && (
-        <IconPicker
-          value={icon}
-          color={modal.kind === 'step' ? modal.goal.color : color}
-          onChange={setIcon}
-        />
-      )}
+      <IconPicker
+        value={icon}
+        color={modal.kind === 'step' ? modal.goal.color : color}
+        choices={modal.kind === 'gift' ? giftIconChoices : undefined}
+        onChange={setIcon}
+      />
       {(modal.kind === 'step' || modal.kind === 'goal') && (
         <label>
           {t('dateOptional')}

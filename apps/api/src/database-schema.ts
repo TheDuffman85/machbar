@@ -96,6 +96,8 @@ CREATE TABLE gifts (
   id TEXT NOT NULL,
   position INTEGER NOT NULL CHECK (position >= 0),
   title TEXT NOT NULL,
+  description TEXT,
+  icon TEXT,
   target_type TEXT NOT NULL CHECK (target_type IN ('goal', 'habitCount', 'habitStreak')),
   goal_id TEXT,
   habit_id TEXT,

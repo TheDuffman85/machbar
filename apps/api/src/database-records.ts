@@ -135,6 +135,8 @@ export function readRecord(db: DatabaseSync, kind: RecordKind, key: string): str
     })),
     gifts: rows('gifts').map((g) => ({
       title: g.title,
+      ...optional('description', g.description),
+      ...optional('icon', g.icon),
       targetType: g.target_type,
       targetId: g.goal_id ?? g.habit_id,
       threshold: g.threshold,
@@ -325,6 +327,8 @@ function writeProfile(
       id: g.id,
       position,
       title: g.title,
+      description: g.description ?? null,
+      icon: g.icon ?? null,
       target_type: g.targetType,
       goal_id: g.targetType === 'goal' ? g.targetId : null,
       habit_id: g.targetType === 'goal' ? null : g.targetId,

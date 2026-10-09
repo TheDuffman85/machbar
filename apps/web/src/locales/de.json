@@ -170,7 +170,15 @@
     "music": "Musik",
     "pencil": "Stift",
     "briefcase": "Aktentasche",
-    "sprout": "Spross"
+    "sprout": "Spross",
+    "gift": "Geschenk",
+    "shoppingBag": "Einkaufstasche",
+    "cake": "Kuchen",
+    "ticket": "Eintrittskarte",
+    "plane": "Reise",
+    "utensils": "Essen",
+    "headphones": "Kopfhörer",
+    "gamepad": "Gaming"
   },
   "selectUserHelp": "Gib eine bestehende Benutzer-ID ein oder scanne ihren QR-Code, um dein Profil zu öffnen.",
   "USER_CREATION_DISABLED": "Neue Profile sind deaktiviert. Nutze ein bestehendes Profil, um fortzufahren.",
@@ -504,5 +512,10 @@
   "taskReminder": "Mich an diese Aufgabe erinnern",
   "taskReminderHint": "Täglich bis zum Abschluss. Bei einem Datum beginnen Erinnerungen an diesem Tag.",
   "scheduledGoal": "Geplant",
-  "taskReminderTimeHint": "Die Zeit folgt {{timezone}} und zukünftigen Zeitzonenänderungen."
+  "taskReminderTimeHint": "Die Zeit folgt {{timezone}} und zukünftigen Zeitzonenänderungen.",
+  "editGift": "Geschenk bearbeiten",
+  "archivedGifts": "Archivierte Geschenke",
+  "emptyArchivedGifts": "Noch keine archivierten Geschenke",
+  "emptyArchivedGiftsDescription": "Geschenke, die du nach dem Einlösen archivierst, erscheinen hier.",
+  "giftDescriptionPlaceholder": "Notizen, Links oder Details zu deinem Geschenk …"
 }

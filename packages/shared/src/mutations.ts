@@ -162,6 +162,27 @@ export function mutateDocument(
       claimedAt: null,
       archivedAt: null,
     });
+  } else if (kind === 'gifts' && method === 'PATCH' && !action) {
+    const gift = doc.gifts.find((g) => g.id === id && !g.archivedAt);
+    if (!gift) throw new DomainError('NOT_FOUND', 404);
+    const changes = onlySupplied(giftInputSchema.partial().parse(body), body);
+    const input = giftInputSchema.parse({
+      title: gift.title,
+      description: gift.description,
+      icon: gift.icon,
+      targetType: gift.targetType,
+      targetId: gift.targetId,
+      threshold: gift.threshold,
+      ...changes,
+    });
+    const targetChanged = input.targetType !== gift.targetType || input.targetId !== gift.targetId;
+    if (
+      !(input.targetType === 'goal' ? doc.goals : doc.habits).some(
+        (item) => item.id === input.targetId && (!targetChanged || !item.archivedAt),
+      )
+    )
+      throw new DomainError('NOT_FOUND', 404);
+    Object.assign(gift, changes, { threshold: input.targetType === 'goal' ? 1 : input.threshold });
   } else if (kind === 'gifts' && action === 'claim' && method === 'POST') {
     const gift = doc.gifts.find((g) => g.id === id && !g.archivedAt);
     if (!gift) throw new DomainError('NOT_FOUND', 404);

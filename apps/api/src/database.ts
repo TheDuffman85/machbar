@@ -11,7 +11,7 @@ export type { RecordKind } from './database-records.js';
 
 export const databaseFilename = 'data.db';
 export const migrationBackupDirectory = 'migration-backup';
-const schemaVersion = 4;
+const schemaVersion = 5;
 
 // Relational rows own persistence. JSON is only the API encoding and legacy
 // import format; archived files remain immutable recovery snapshots.
@@ -145,7 +145,9 @@ export class SqliteDatabase {
         db.exec('BEGIN IMMEDIATE');
         try {
           if (version() === 3) {
-            db.exec(`ALTER TABLE goals ADD COLUMN date TEXT;
+            db.exec(`ALTER TABLE gifts ADD COLUMN description TEXT;
+              ALTER TABLE gifts ADD COLUMN icon TEXT;
+              ALTER TABLE goals ADD COLUMN date TEXT;
               ALTER TABLE goals ADD COLUMN date_present INTEGER NOT NULL DEFAULT 0 CHECK (date_present IN (0, 1));
               ALTER TABLE goals ADD COLUMN reminder_time TEXT;
               ALTER TABLE goals ADD COLUMN reminder_present INTEGER NOT NULL DEFAULT 0 CHECK (reminder_present IN (0, 1));
@@ -166,6 +168,19 @@ export class SqliteDatabase {
             }
             db.exec(`PRAGMA user_version = ${schemaVersion}`);
           }
+          db.exec('COMMIT');
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
+      }
+      if (version() === 4) {
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          if (version() === 4)
+            db.exec(`ALTER TABLE gifts ADD COLUMN description TEXT;
+              ALTER TABLE gifts ADD COLUMN icon TEXT;
+              PRAGMA user_version = ${schemaVersion};`);
           db.exec('COMMIT');
         } catch (error) {
           db.exec('ROLLBACK');

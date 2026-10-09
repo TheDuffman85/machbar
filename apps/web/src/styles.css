@@ -870,9 +870,9 @@ h3 {
   font-weight: 400;
 }
 .next-gift-card h4 {
-  font-family: Georgia, serif;
-  font-size: 20px;
-  font-weight: 400;
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 600;
   margin-top: 8px;
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -999,9 +999,9 @@ h3 {
 }
 .achievements-count {
   display: block;
-  font-family: Georgia, serif;
+  font-family: inherit;
   font-size: 28px;
-  font-weight: 400;
+  font-weight: 600;
   margin: 12px 0 14px;
 }
 .achievements-count small {
@@ -1409,11 +1409,37 @@ h3 {
   margin-top: 17px;
   font-size: 11px;
 }
-.gift-archive {
-  position: absolute;
-  top: 19px;
-  right: 12px;
-  transform: translateY(36px);
+.gift-card-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.gift-card-actions {
+  display: flex;
+  gap: 4px;
+}
+.gift-description {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.gift-description a {
+  color: var(--green);
+  text-decoration: underline;
+}
+.gift-card .gift-description {
+  min-height: 0;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+.next-gift-card .day-gift-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.day-gift-title > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 .gift.encouragement,
 .claimed-label {
@@ -2289,13 +2315,11 @@ legend {
     font-size: 24px;
   }
   .gift-grid {
+    grid-template-columns: 1fr;
     gap: 14px;
   }
   .gift-card {
     padding: 17px;
-  }
-  .gift-card-top {
-    flex-direction: column;
   }
   .gift-card .gift-illustration {
     margin-bottom: 8px;
@@ -2306,11 +2330,6 @@ legend {
   }
   .gift-card p {
     font-size: 10px;
-  }
-  .gift-archive {
-    top: 17px;
-    right: 12px;
-    transform: none;
   }
   .badge-grid {
     gap: 12px;

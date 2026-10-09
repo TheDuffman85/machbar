@@ -57,7 +57,23 @@ export const iconChoices = [
   'briefcase',
   'sprout',
 ] as const;
-export const iconSchema = z.enum(iconChoices);
+export const giftIconChoices = [
+  'gift',
+  'shoppingBag',
+  'cake',
+  'ticket',
+  'plane',
+  'utensils',
+  'headphones',
+  'gamepad',
+  'book',
+  'coffee',
+  'heart',
+  'star',
+  'music',
+  'sun',
+] as const;
+export const iconSchema = z.enum([...iconChoices, ...giftIconChoices]);
 export type EntityIcon = z.infer<typeof iconSchema>;
 const reminderTimeSchema = z
   .string()
@@ -114,6 +130,8 @@ const goalSchema = goalInputSchema.extend({
 export const giftInputSchema = z
   .object({
     title,
+    description: z.string().max(2000).optional(),
+    icon: iconSchema.optional(),
     targetType: z.enum(['goal', 'habitCount', 'habitStreak']),
     targetId: id,
     threshold: z.number().int().min(1).max(10000).default(1),

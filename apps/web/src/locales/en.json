@@ -170,7 +170,15 @@
     "music": "Music",
     "pencil": "Pencil",
     "briefcase": "Briefcase",
-    "sprout": "Sprout"
+    "sprout": "Sprout",
+    "gift": "Gift",
+    "shoppingBag": "Shopping bag",
+    "cake": "Cake",
+    "ticket": "Ticket",
+    "plane": "Travel",
+    "utensils": "Meal",
+    "headphones": "Headphones",
+    "gamepad": "Gaming"
   },
   "selectUserHelp": "Enter an existing user ID or scan its QR code to open your profile.",
   "USER_CREATION_DISABLED": "New profiles are disabled. Use an existing profile to continue.",
@@ -504,5 +512,10 @@
   "taskReminder": "Remind me about this task",
   "taskReminderHint": "Daily until completed. With a date, reminders start on that date.",
   "scheduledGoal": "Scheduled",
-  "taskReminderTimeHint": "Time follows {{timezone}} and any future timezone changes."
+  "taskReminderTimeHint": "Time follows {{timezone}} and any future timezone changes.",
+  "editGift": "Edit your gift",
+  "archivedGifts": "Archived gifts",
+  "emptyArchivedGifts": "No archived gifts yet",
+  "emptyArchivedGiftsDescription": "Gifts you archive after claiming will appear here.",
+  "giftDescriptionPlaceholder": "Add notes, links, or details about your gift…"
 }
