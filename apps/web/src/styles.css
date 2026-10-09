@@ -27,6 +27,8 @@
   --level-ring: #9577aa;
   --level-ring-track: #dce3d6;
   --shadow: 0 4px 18px #33442b03;
+  --warning: #9a5b13;
+  --warning-soft: #fbefdc;
   color-scheme: light;
 }
 :root.dark {
@@ -41,6 +43,8 @@
   --level-ring: #c4acd6;
   --level-ring-track: #425347;
   --shadow: none;
+  --warning: #e9b872;
+  --warning-soft: #4a3a22;
   color: #e4ece4;
   background: #17221e;
   color-scheme: dark;
@@ -929,6 +933,26 @@ h3 {
   gap: 6px;
   color: var(--green);
 }
+.day-gift-stuck {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  margin-bottom: 13px;
+  padding: 9px 11px;
+  border-radius: 11px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warning);
+  background: var(--warning-soft);
+  text-decoration: none;
+}
+.day-gift-stuck > svg:last-child {
+  margin-left: auto;
+}
+.day-gift-stuck:hover {
+  text-decoration: underline;
+}
 .day-gift-footer {
   border-top: 1px solid var(--line);
   padding-top: 13px;
@@ -1060,7 +1084,8 @@ h3 {
   max-width: 330px;
   margin: auto;
 }
-.empty .text-button {
+.empty .text-button,
+.empty .button {
   margin-top: 14px;
 }
 .notice {
@@ -1408,6 +1433,39 @@ h3 {
 .day-gift-title > svg {
   flex-shrink: 0;
   margin-top: 2px;
+}
+.gift-stuck {
+  padding-top: 14px;
+}
+.gift-card .gift-stuck p {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 0;
+  padding: 10px 12px;
+  border-radius: 11px;
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+.gift-card .gift-stuck p > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.gift-card .gift-stuck .button {
+  margin-top: 10px;
+}
+.gift-stuck-actions {
+  display: flex;
+  gap: 8px;
+}
+.gift-stuck-actions .button {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+.status-pill.stuck {
+  color: var(--warning);
+  background: var(--warning-soft);
 }
 .gift.encouragement,
 .claimed-label {

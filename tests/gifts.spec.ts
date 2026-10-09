@@ -102,6 +102,10 @@ test('gifts keep editable notes, links, icons, milestones and archived claims ac
     0,
   );
   await expect(card.locator('.claimed-label')).toBeVisible();
+  await navigate(page, 'Today');
+  const receivedToday = page.getByRole('region', { name: 'Gifts received on this day' });
+  await expect(receivedToday.getByRole('link', { name: /Birthday cake/ })).toBeVisible();
+  await navigate(page, 'Gifts');
   await card.getByRole('button', { name: 'Archive Birthday cake', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Archive', exact: true }).click();
   await expect(card).toHaveCount(0);
@@ -204,6 +208,9 @@ test('legacy gifts default to a gift icon and can be edited with an archived goa
   await card.getByRole('button', { name: 'Edit Old reward', exact: true }).click();
   let dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel('Choose a goal')).toHaveValue(goalId);
+  await expect(dialog.getByRole('option', { name: 'Old goal (Archived)' })).toHaveAttribute(
+    'disabled',
+  );
   await expect(dialog.getByLabel('A little more detail (optional)')).toHaveValue('');
   await expect(dialog.getByRole('button', { name: 'Gift', exact: true })).toHaveAttribute(
     'aria-pressed',

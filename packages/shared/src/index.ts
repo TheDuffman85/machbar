@@ -265,7 +265,13 @@ export type Progress = {
   >;
   gifts: Record<
     string,
-    { state: 'locked' | 'available' | 'claimed'; current: number; target: number }
+    {
+      state: 'locked' | 'available' | 'claimed';
+      current: number;
+      target: number;
+      /** Locked, and its habit or goal was archived, so it can no longer progress. */
+      stuck: boolean;
+    }
   >;
 };
 
@@ -469,11 +475,11 @@ export function progressFor(doc: UserDocument, now = new Date()): Progress {
           ? (habits[gift.targetId]?.count ?? 0)
           : (habits[gift.targetId]?.best ?? 0);
     const target = gift.targetType === 'goal' ? 1 : gift.threshold;
-    gifts[gift.id] = {
-      state: gift.claimedAt ? 'claimed' : current >= target ? 'available' : 'locked',
-      current,
-      target,
-    };
+    const state = gift.claimedAt ? 'claimed' : current >= target ? 'available' : 'locked';
+    const source = (gift.targetType === 'goal' ? doc.goals : doc.habits).find(
+      (item) => item.id === gift.targetId,
+    );
+    gifts[gift.id] = { state, current, target, stuck: state === 'locked' && !!source?.archivedAt };
   }
   const xp = wins * 10;
   return {

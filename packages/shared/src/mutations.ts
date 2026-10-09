@@ -187,8 +187,9 @@ export function mutateDocument(
   } else if (kind === 'gifts' && action === 'claim' && method === 'POST') {
     const gift = doc.gifts.find((g) => g.id === id && !g.archivedAt);
     if (!gift) throw new DomainError('NOT_FOUND', 404);
-    if (progressFor(doc, now).gifts[id]!.state === 'locked')
-      throw new DomainError('GIFT_LOCKED', 409);
+    // A gift whose habit or goal was archived can no longer unlock, so it may be marked as received.
+    const progress = progressFor(doc, now).gifts[id]!;
+    if (progress.state === 'locked' && !progress.stuck) throw new DomainError('GIFT_LOCKED', 409);
     gift.claimedAt ??= now.toISOString();
   } else throw new DomainError('NOT_FOUND', 404);
 }

@@ -84,6 +84,37 @@ describe('gift editing', () => {
     expect(doc.gifts[0]).toMatchObject({ targetType: 'goal', targetId: goalId, threshold: 1 });
   });
 
+  it('marks locked gifts as stuck when their habit or goal is archived', () => {
+    const { doc, goalId, giftId, edit } = fixture();
+    expect(progressFor(doc, now).gifts[giftId]!.stuck).toBe(false);
+    doc.habits[0]!.archivedAt = now.toISOString();
+    expect(progressFor(doc, now).gifts[giftId]).toMatchObject({ state: 'locked', stuck: true });
+    edit({ targetType: 'goal', targetId: goalId });
+    expect(progressFor(doc, now).gifts[giftId]!.stuck).toBe(false);
+    doc.habits[0]!.archivedAt = null;
+    doc.goals[0]!.archivedAt = now.toISOString();
+    expect(progressFor(doc, now).gifts[giftId]!.stuck).toBe(true);
+    // Gifts unlocked before archiving stay claimable.
+    doc.habits[0]!.archivedAt = now.toISOString();
+    Object.assign(doc.gifts[0]!, {
+      targetType: 'habitCount',
+      targetId: doc.habits[0]!.id,
+      threshold: 0,
+    });
+    expect(progressFor(doc, now).gifts[giftId]).toMatchObject({ state: 'available', stuck: false });
+  });
+
+  it('lets stuck gifts be marked as received but keeps other locked gifts locked', () => {
+    const { doc, giftId } = fixture();
+    const claim = () =>
+      mutateDocument(doc, `/api/gifts/${giftId}/claim`, 'POST', {}, randomUUID(), now);
+    expect(claim).toThrow('GIFT_LOCKED');
+    doc.habits[0]!.archivedAt = now.toISOString();
+    claim();
+    expect(doc.gifts[0]!.claimedAt).toBe(now.toISOString());
+    expect(progressFor(doc, now).gifts[giftId]).toMatchObject({ state: 'claimed', stuck: false });
+  });
+
   it('rejects missing, wrong-kind and archived replacement targets without modifying the gift', () => {
     const { doc, goalId, edit } = fixture();
     const before = structuredClone(doc);

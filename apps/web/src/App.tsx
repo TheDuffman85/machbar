@@ -54,6 +54,7 @@ import {
   Pencil,
   Archive,
   Trash2,
+  TriangleAlert,
   Bell,
   RefreshCw,
   Download,
@@ -1186,8 +1187,10 @@ function TaskRow({
 }
 function Today() {
   const { t, i18n } = useTranslation();
-  const { snapshot } = useApp();
+  const { snapshot, setModal, busy } = useApp();
   const { document: doc, progress } = snapshot;
+  const hasActiveHabits = doc.habits.some((habit) => !habit.archivedAt);
+  const hasActiveGoals = doc.goals.some((goal) => !goal.archivedAt);
   const today = localDate(doc.preferences.timezone);
   const earliestDate = addDays(today, -(snapshot.dailyHistoryDays ?? 3));
   const [selected, setSelected] = useState('');
@@ -1274,6 +1277,12 @@ function Today() {
   const reachedBadges = badgeDefinitions
     .map((badge, index) => ({ badge, color: colors[index % colors.length] }))
     .filter(({ badge: [id] }) => progress.badgeDates[id] === date);
+  const receivedGifts = doc.gifts.filter(
+    (gift) =>
+      !gift.archivedAt &&
+      gift.claimedAt &&
+      localDate(doc.preferences.timezone, new Date(gift.claimedAt)) === date,
+  );
   const total = habits.length + steps.length + datedGoals.length;
   const completed =
     habits.filter((h) => doc.completions[operationKey(doc, 'habit', h.id, date)]?.completed)
@@ -1434,6 +1443,29 @@ function Today() {
               ))}
             </section>
           )}
+          {receivedGifts.length > 0 && (
+            <section className="completed-goals" aria-labelledby="received-gifts-heading">
+              <div className="section-heading">
+                <h2 id="received-gifts-heading">
+                  <GiftIcon size={18} aria-hidden="true" />
+                  {t('receivedGifts')}
+                  <span className="count-pill">{receivedGifts.length}</span>
+                </h2>
+              </div>
+              {receivedGifts.map((gift) => (
+                <NavLink className="completed-goal" to="/gifts" key={gift.id}>
+                  <span className="task-icon lavender">
+                    <EntityIcon name={gift.icon ?? 'gift'} />
+                  </span>
+                  <span className="task-copy">
+                    <strong>{gift.title}</strong>
+                    <span>{giftDescription(gift, doc, t)}</span>
+                  </span>
+                  <ArrowUpRight size={18} aria-hidden="true" />
+                </NavLink>
+              ))}
+            </section>
+          )}
           <div className="section-heading">
             <h2>
               {t('dailyHabits')}
@@ -1462,7 +1494,18 @@ function Today() {
               <Empty
                 title={t(date < today ? 'noPastHabits' : 'noHabits')}
                 description={t(date < today ? 'noPastHabitsDescription' : 'noHabitsDescription')}
-              />
+              >
+                {!hasActiveHabits && (
+                  <button
+                    className="button primary"
+                    disabled={busy}
+                    onClick={() => setModal({ kind: 'habit' })}
+                  >
+                    <Plus size={16} aria-hidden="true" />
+                    {t('addChallenge')}
+                  </button>
+                )}
+              </Empty>
             )}
           </div>
           {periodHabits.length > 0 && (
@@ -1541,11 +1584,22 @@ function Today() {
                   />
                 ))}
               </>
-            ) : (
+            ) : hasActiveGoals ? (
               <div className="quiet-empty">
                 <Target size={19} />
                 <p>{t('noDueSteps')}</p>
               </div>
+            ) : (
+              <Empty title={t('emptyGoals')} description={t('emptyGoalsDescription')} icon={Target}>
+                <button
+                  className="button primary"
+                  disabled={busy}
+                  onClick={() => setModal({ kind: 'goal' })}
+                >
+                  <Plus size={16} aria-hidden="true" />
+                  {t('addGoal')}
+                </button>
+              </Empty>
             )}
           </div>
           {(optionalSteps.length > 0 || standaloneGoals.length > 0) && (
@@ -1662,8 +1716,9 @@ function DayGiftCard() {
   const { snapshot, setModal, action, busy, notify } = useApp();
   const { document: doc, progress } = snapshot;
   const gifts = doc.gifts.filter((gift) => !gift.archivedAt);
+  const stuckCount = gifts.filter((gift) => progress.gifts[gift.id]!.stuck).length;
   const pending = gifts
-    .filter((gift) => !gift.claimedAt)
+    .filter((gift) => !gift.claimedAt && !progress.gifts[gift.id]!.stuck)
     .map((gift) => {
       const state = progress.gifts[gift.id]!;
       const goal = gift.targetType === 'goal' ? progress.goals[gift.targetId] : undefined;
@@ -1818,6 +1873,13 @@ function DayGiftCard() {
           {addGift}
         </>
       )}
+      {stuckCount > 0 && (
+        <NavLink to="/gifts" className="day-gift-stuck">
+          <TriangleAlert size={15} aria-hidden="true" />
+          {t('dayGiftsStuck', { count: stuckCount })}
+          <ChevronRight size={15} aria-hidden="true" />
+        </NavLink>
+      )}
       {gifts.length > 0 && (
         <NavLink to="/gifts" className="text-button day-gift-footer">
           {t('viewAllGifts')}
@@ -1833,11 +1895,13 @@ function RemoveItemButton({
   id,
   title,
   className = 'icon-button',
+  showLabel = false,
 }: {
   kind: RemovableKind;
   id: string;
   title: string;
   className?: string;
+  showLabel?: boolean;
 }) {
   const { t } = useTranslation();
   const { snapshot, setModal, action, busy } = useApp();
@@ -1860,6 +1924,7 @@ function RemoveItemButton({
       }
     >
       <Icon size={16} />
+      {showLabel && t(label)}
     </button>
   );
 }
@@ -2204,6 +2269,16 @@ function Gifts() {
   const { document: doc, progress } = snapshot;
   const [archived, setArchived] = useState(false);
   const gifts = doc.gifts.filter((g) => !!g.archivedAt === archived);
+  const claim = (gift: Gift) =>
+    setModal({
+      kind: 'confirm',
+      title: t('claimGift'),
+      message: t('claimConfirm', { title: gift.title }),
+      confirmLabel: t('claimGift'),
+      onConfirm: async () => {
+        if (await action(`/api/gifts/${gift.id}/claim`, 'POST', {})) notify(t('giftCelebration'));
+      },
+    });
   return (
     <>
       <Heading title={t('gifts')} subtitle={t('giftsSubtitle')}>
@@ -2237,9 +2312,13 @@ function Gifts() {
                     <EntityIcon name={gift.icon ?? 'gift'} size={29} />
                   </span>
                   <div className="gift-card-tools">
-                    <span className={`status-pill ${p.state}`}>
-                      {p.state === 'locked' && <Lock size={12} />}
-                      {t(archived ? 'archived' : p.state)}
+                    <span className={`status-pill ${p.stuck ? 'stuck' : p.state}`}>
+                      {p.stuck ? (
+                        <TriangleAlert size={12} />
+                      ) : (
+                        p.state === 'locked' && <Lock size={12} />
+                      )}
+                      {t(archived ? 'archived' : p.stuck ? 'giftStuck' : p.state)}
                     </span>
                     {!archived && (
                       <div className="gift-card-actions">
@@ -2266,22 +2345,7 @@ function Gifts() {
                   {Math.min(p.current, p.target)} / {p.target}
                 </div>
                 {p.state === 'available' && !archived ? (
-                  <button
-                    className="button primary"
-                    disabled={busy}
-                    onClick={() =>
-                      setModal({
-                        kind: 'confirm',
-                        title: t('claimGift'),
-                        message: t('claimConfirm', { title: gift.title }),
-                        confirmLabel: t('claimGift'),
-                        onConfirm: async () => {
-                          if (await action(`/api/gifts/${gift.id}/claim`, 'POST', {}))
-                            notify(t('giftCelebration'));
-                        },
-                      })
-                    }
-                  >
+                  <button className="button primary" disabled={busy} onClick={() => claim(gift)}>
                     <GiftIcon size={16} />
                     {t('claimGift')}
                   </button>
@@ -2291,6 +2355,38 @@ function Gifts() {
                     {new Intl.DateTimeFormat(doc.preferences.language).format(
                       new Date(gift.claimedAt!),
                     )}
+                  </div>
+                ) : p.stuck && !archived ? (
+                  <div className="gift-stuck">
+                    <p>
+                      <TriangleAlert size={16} aria-hidden="true" />
+                      {t(gift.targetType === 'goal' ? 'giftStuckGoal' : 'giftStuckHabit')}
+                    </p>
+                    <button
+                      className="button secondary"
+                      disabled={busy}
+                      onClick={() => setModal({ kind: 'gift', gift })}
+                    >
+                      <Pencil size={16} />
+                      {t('chooseNewMilestone')}
+                    </button>
+                    <div className="gift-stuck-actions">
+                      <button
+                        className="button secondary"
+                        disabled={busy}
+                        onClick={() => claim(gift)}
+                      >
+                        <GiftIcon size={16} />
+                        {t('markGiftReceived')}
+                      </button>
+                      <RemoveItemButton
+                        kind="gifts"
+                        id={gift.id}
+                        title={gift.title}
+                        className="button secondary"
+                        showLabel
+                      />
+                    </div>
                   </div>
                 ) : (
                   <div className="gift encouragement">{t('keepGoing')}</div>
@@ -3120,8 +3216,8 @@ function ChallengeForm({
                 —
               </option>
               {sources.map((source) => (
-                <option value={source.id} key={source.id}>
-                  {source.title}
+                <option value={source.id} key={source.id} disabled={!!source.archivedAt}>
+                  {source.archivedAt ? `${source.title} (${t('archived')})` : source.title}
                 </option>
               ))}
             </select>
