@@ -783,6 +783,8 @@ h3 {
   line-height: 1.6;
 }
 .optional-steps-toggle {
+  display: flex;
+  margin-left: auto;
   margin-top: 12px;
 }
 .completed-goals {
@@ -826,8 +828,6 @@ h3 {
 }
 .next-gift-card {
   padding: 22px;
-  position: relative;
-  background: linear-gradient(135deg, var(--panel), var(--bg));
 }
 .gift-illustration {
   width: 56px;
@@ -852,23 +852,87 @@ h3 {
 }
 .next-gift-card .small-label {
   display: block;
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.7px;
+  font-size: 10px;
+  margin-top: 18px;
 }
 .next-gift-card h3 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+}
+.next-gift-card h3 > svg {
+  color: #bfa584;
+}
+.next-gift-card h3 .status-pill {
+  margin-left: auto;
+  font-weight: 400;
+}
+.next-gift-card h4 {
   font-family: Georgia, serif;
-  font-size: 21px;
+  font-size: 20px;
   font-weight: 400;
   margin-top: 8px;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
 .next-gift-card p {
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.7;
   color: var(--muted);
-  margin: 10px 0 18px;
+  margin: 10px 0 16px;
+  overflow-wrap: anywhere;
+}
+.day-gift-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--green);
+  margin: 12px 0 18px;
+}
+.day-gift-target > span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.day-gift-target > svg {
+  flex-shrink: 0;
+}
+.day-gift-target:hover > span {
+  text-decoration: underline;
+}
+.day-gift-progress {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.day-gift-progress strong {
+  color: var(--text);
+  white-space: nowrap;
+}
+.next-gift-card .day-gift-remaining {
+  margin-bottom: 0;
+  color: var(--green);
+}
+.next-gift-card .button {
+  width: 100%;
+  font-size: 11px;
+}
+.next-gift-card .day-gift-enjoyed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--green);
+}
+.day-gift-footer {
+  border-top: 1px solid var(--line);
+  padding-top: 13px;
+  width: 100%;
 }
 .next-gift-card .progress-track span {
   background: #c9af88;
@@ -2170,15 +2234,6 @@ legend {
   .streak-card,
   .achievements-card {
     padding: 19px;
-  }
-  .next-gift-card h3 {
-    font-size: 20px;
-  }
-  .next-gift-card .small-label {
-    font-size: 8px;
-  }
-  .next-gift-card .text-button {
-    font-size: 10px;
   }
   .mobile-nav {
     display: flex;

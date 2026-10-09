@@ -501,31 +501,50 @@ test('goals can be broken into dated and undated steps, reordered, completed and
 });
 test('gift unlock, claiming and achievements', async ({ page }) => {
   await onboard(page);
+  const dayRewards = page.getByRole('region', { name: 'Rewards', exact: true });
+  await expect(dayRewards.getByRole('link', { name: 'Add a habit' })).toHaveAttribute(
+    'href',
+    '/habits',
+  );
   await addHabit(page);
-  await page.goto('/rewards');
-  await page.getByRole('button', { name: 'Add a gift', exact: true }).click();
+  await dayRewards.getByRole('button', { name: 'Add a gift', exact: true }).click();
   await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('New shoes');
   await page.getByLabel('Target', { exact: true }).fill('1');
   await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await page.goto('/');
+  await expect(dayRewards).toContainText('New shoes');
+  await expect(dayRewards).toContainText('Just 1 more completion to unlock this reward.');
+  await expect(dayRewards.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
+  await dayRewards.screenshot({
+    path: `test-results/day-rewards-locked-${test.info().project.name}.png`,
+  });
   await page.getByRole('button', { name: 'Complete Take a little walk', exact: true }).click();
   await serverXp(page, 10);
   const reached = page.getByRole('region', { name: 'Achievements reached on this day' });
   await expect(reached).toContainText('The first step');
   await expect(page.locator('.achievements-count')).toHaveText('1 / 8');
   await page.screenshot({ path: `test-results/achievements-${test.info().project.name}.png` });
+  await expect(dayRewards).toContainText('1 ready');
+  await expect(dayRewards.getByRole('progressbar')).toHaveCount(0);
+  await dayRewards.screenshot({
+    path: `test-results/day-rewards-ready-${test.info().project.name}.png`,
+  });
   await page.getByRole('button', { name: 'Previous day', exact: true }).click();
   await expect(reached).toHaveCount(0);
-  await page.goto('/rewards');
-  await expect(page.getByText('Ready for you', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'I treated myself', exact: true }).click();
+  await dayRewards.getByRole('button', { name: 'I treated myself', exact: true }).click();
   const confirmation = page.getByRole('dialog', { name: 'I treated myself', exact: true });
   await expect(confirmation).toContainText('Mark “New shoes” as claimed?');
   await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(page.getByText('Ready for you', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'I treated myself', exact: true }).click();
+  await expect(dayRewards.getByText('Ready for you', { exact: true })).toBeVisible();
+  await dayRewards.getByRole('button', { name: 'I treated myself', exact: true }).click();
   await confirmation.getByRole('button', { name: 'I treated myself', exact: true }).click();
+  await expect(dayRewards).toContainText('Your latest treat');
+  await expect(dayRewards).toContainText('Enjoyed');
+  await expect(dayRewards).toContainText('New shoes');
+  await dayRewards.screenshot({
+    path: `test-results/day-rewards-claimed-${test.info().project.name}.png`,
+  });
+  await page.goto('/rewards');
   await expect(page.getByText('Enjoyed', { exact: true })).toBeVisible();
   await expect(page.locator('.badge-card.earned')).toHaveCount(1);
   await page.goto('/');
@@ -544,7 +563,150 @@ test('gift unlock, claiming and achievements', async ({ page }) => {
     .getByRole('button', { name: 'Archive', exact: true })
     .click();
   await expect(page.getByRole('heading', { name: 'New shoes', exact: true })).toHaveCount(0);
+  await page.goto('/');
+  await expect(dayRewards).toContainText('What are you looking forward to?');
+  await expect(dayRewards.getByRole('button', { name: 'Add a gift' })).toBeVisible();
 });
+
+for (const language of ['en', 'de'] as const) {
+  test(`day rewards explain partial goals and broken streaks in ${language}`, async ({ page }) => {
+    await onboard(page);
+    const { document: doc, today } = await readSnapshot(page);
+    doc.preferences.language = language;
+    doc.preferences.theme = language === 'de' ? 'dark' : 'light';
+    const habitId = crypto.randomUUID();
+    const goalId = crypto.randomUUID();
+    doc.habits = [
+      {
+        id: habitId,
+        title: 'Reading',
+        description: '',
+        color: 'sage',
+        archivedAt: null,
+        schedules: [
+          {
+            from: addDays(today, -4),
+            weekdays: [0, 1, 2, 3, 4, 5, 6],
+            timezone: doc.preferences.timezone,
+          },
+        ],
+      },
+    ];
+    doc.goals = [
+      {
+        id: goalId,
+        title: 'A cozy home',
+        description: '',
+        color: 'lavender',
+        archivedAt: null,
+        steps: ['Tidy', 'Clean', 'Paint', 'Decorate'].map((title) => ({
+          id: crypto.randomUUID(),
+          title,
+          date: null,
+          archivedAt: null,
+        })),
+      },
+    ];
+    for (const step of doc.goals[0]!.steps.slice(0, 3)) {
+      applyCompletion(doc, {
+        operationId: crypto.randomUUID(),
+        targetType: 'step',
+        targetId: step.id,
+        date: today,
+        timezone: doc.preferences.timezone,
+        completed: true,
+        expectedVersion: 0,
+      });
+    }
+    for (const daysAgo of [4, 3]) {
+      applyCompletion(doc, {
+        operationId: crypto.randomUUID(),
+        targetType: 'habit',
+        targetId: habitId,
+        date: addDays(today, -daysAgo),
+        timezone: doc.preferences.timezone,
+        completed: true,
+        expectedVersion: 0,
+      });
+    }
+    doc.gifts = [
+      {
+        id: crypto.randomUUID(),
+        title: 'A new book',
+        targetType: 'habitStreak',
+        targetId: habitId,
+        threshold: 5,
+        archivedAt: null,
+        claimedAt: null,
+      },
+      {
+        id: crypto.randomUUID(),
+        title: 'A lovely dinner',
+        targetType: 'goal',
+        targetId: goalId,
+        threshold: 1,
+        archivedAt: null,
+        claimedAt: null,
+      },
+    ];
+    async function seed() {
+      const response = await page.request.post('/api/test/seed', {
+        headers: { origin: base, 'X-Machbar-User': doc.userId },
+        data: doc,
+      });
+      expect(response.ok()).toBe(true);
+      await page.reload();
+    }
+    await seed();
+    const card = page.getByRole('region', {
+      name: language === 'de' ? 'Belohnungen' : 'Rewards',
+      exact: true,
+    });
+    await expect(card).toContainText('A lovely dinner');
+    await expect(card.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '3');
+    await expect(card.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '4');
+    await expect(card).toContainText(language === 'de' ? 'Nur noch 1 Schritt' : 'Just 1 more step');
+    await expect(card.locator('.day-gift-target')).toHaveAttribute('href', '/goals');
+    await card.screenshot({
+      path: `test-results/day-rewards-goal-${language}-${test.info().project.name}.png`,
+    });
+    doc.gifts[1]!.archivedAt = new Date().toISOString();
+    await seed();
+    await expect(card).toContainText('A new book');
+    await expect(card).toContainText(language === 'de' ? 'Beste Serie' : 'Best streak');
+    await expect(card).toContainText(language === 'de' ? 'Aktuelle Serie: 0' : 'Current streak: 0');
+    await expect(card.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '2');
+    await expect(card.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '5');
+    await expect(card.locator('.day-gift-target')).toHaveAttribute('href', '/habits');
+    await card.screenshot({
+      path: `test-results/day-rewards-streak-${language}-${test.info().project.name}.png`,
+    });
+    doc.gifts.push({
+      id: crypto.randomUUID(),
+      title: 'A quiet afternoon',
+      targetType: 'habitCount',
+      targetId: habitId,
+      threshold: 2,
+      archivedAt: null,
+      claimedAt: null,
+    });
+    await seed();
+    await expect(card).toContainText('A quiet afternoon');
+    await expect(
+      card.getByRole('button', {
+        name: language === 'de' ? 'Habe ich mir gegönnt' : 'I treated myself',
+      }),
+    ).toBeVisible();
+    await expect(card.getByRole('progressbar')).toHaveCount(0);
+    const accessibility = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+      .analyze();
+    expect(accessibility.violations.map((violation) => violation.id)).toEqual([]);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+  });
+}
 
 test('archive confirmations cancel safely, restore focus and preserve progress', async ({
   page,

@@ -1278,13 +1278,6 @@ function Today() {
     dateStyle: 'medium',
     timeZone: 'UTC',
   }).format(new Date(`${date}T12:00:00Z`));
-  const nextGift = doc.gifts
-    .filter((g) => !g.archivedAt && !g.claimedAt)
-    .sort(
-      (a, b) =>
-        progress.gifts[b.id]!.current / progress.gifts[b.id]!.target -
-        progress.gifts[a.id]!.current / progress.gifts[a.id]!.target,
-    )[0];
   return (
     <>
       <h1 className="visually-hidden">{t('greeting', { name: doc.preferences.name })}</h1>
@@ -1650,39 +1643,173 @@ function Today() {
               <ChevronRight size={16} />
             </NavLink>
           </section>
-          <section className="panel next-gift-card">
-            <span className="gift-illustration">
-              <GiftIcon size={31} strokeWidth={1.6} />
-              <Sparkles size={13} />
-            </span>
-            <span className="small-label">{t('nextGift')}</span>
-            <h3>{nextGift?.title ?? t('emptyGifts')}</h3>
-            {nextGift ? (
-              <>
-                <p>{giftDescription(nextGift, doc, t)}</p>
-                <Bar
-                  value={progress.gifts[nextGift.id]!.current}
-                  max={progress.gifts[nextGift.id]!.target}
-                />
-                <div className="gift-fraction">
-                  {Math.min(
-                    progress.gifts[nextGift.id]!.current,
-                    progress.gifts[nextGift.id]!.target,
-                  )}{' '}
-                  / {progress.gifts[nextGift.id]!.target}
-                </div>
-              </>
-            ) : (
-              <p>{t('noNextGift')}</p>
-            )}
-            <NavLink to="/rewards" className="text-button">
-              {t('viewRewards')}
-              <ChevronRight size={16} />
-            </NavLink>
-          </section>
+          <DayGiftCard />
         </aside>
       </div>
     </>
+  );
+}
+
+function DayGiftCard() {
+  const { t } = useTranslation();
+  const { snapshot, setModal, action, busy, notify } = useApp();
+  const { document: doc, progress } = snapshot;
+  const gifts = doc.gifts.filter((gift) => !gift.archivedAt);
+  const pending = gifts
+    .filter((gift) => !gift.claimedAt)
+    .map((gift) => {
+      const state = progress.gifts[gift.id]!;
+      const goal = gift.targetType === 'goal' ? progress.goals[gift.targetId] : undefined;
+      return {
+        gift,
+        state: state.state,
+        current: goal?.completed ?? state.current,
+        target: goal?.total ?? state.target,
+      };
+    })
+    .sort(
+      (a, b) =>
+        Number(b.state === 'available') - Number(a.state === 'available') ||
+        b.current / b.target - a.current / a.target,
+    );
+  const next = pending[0];
+  const readyCount = pending.filter((item) => item.state === 'available').length;
+  const latest = gifts
+    .filter((gift) => gift.claimedAt)
+    .sort((a, b) => b.claimedAt!.localeCompare(a.claimedAt!))[0];
+  const canAddGift = [...doc.goals, ...doc.habits].some((item) => !item.archivedAt);
+  const addGift = canAddGift ? (
+    <button className="button primary" disabled={busy} onClick={() => setModal({ kind: 'gift' })}>
+      <Plus size={16} aria-hidden="true" />
+      {t('addGift')}
+    </button>
+  ) : (
+    <NavLink to="/habits" className="button primary">
+      <Plus size={16} aria-hidden="true" />
+      {t('addChallenge')}
+    </NavLink>
+  );
+  return (
+    <section className="panel next-gift-card" aria-labelledby="day-gifts-heading">
+      <h3>
+        <GiftIcon size={18} aria-hidden="true" />
+        <span id="day-gifts-heading">{t('rewards')}</span>
+        {readyCount > 0 && (
+          <span className="status-pill available">{t('dayGiftsReady', { count: readyCount })}</span>
+        )}
+      </h3>
+      {next ? (
+        <>
+          <span className="small-label">
+            {t(next.state === 'available' ? 'available' : 'nextGift')}
+          </span>
+          <h4>{next.gift.title}</h4>
+          {next.state === 'available' ? (
+            <>
+              <p>{t('dayGiftUnlocked')}</p>
+              <button
+                className="button primary"
+                disabled={busy}
+                onClick={() =>
+                  setModal({
+                    kind: 'confirm',
+                    title: t('claimGift'),
+                    message: t('claimConfirm', { title: next.gift.title }),
+                    confirmLabel: t('claimGift'),
+                    onConfirm: async () => {
+                      if (await action(`/api/gifts/${next.gift.id}/claim`, 'POST', {}))
+                        notify(t('giftCelebration'));
+                    },
+                  })
+                }
+              >
+                <Check size={16} aria-hidden="true" />
+                {t('claimGift')}
+              </button>
+            </>
+          ) : (
+            <>
+              <NavLink
+                to={next.gift.targetType === 'goal' ? '/goals' : '/habits'}
+                className="day-gift-target"
+              >
+                {next.gift.targetType === 'goal' ? (
+                  <Target size={15} aria-hidden="true" />
+                ) : (
+                  <Leaf size={15} aria-hidden="true" />
+                )}
+                <span>
+                  {next.gift.targetType === 'goal'
+                    ? giftDescription(next.gift, doc, t)
+                    : t(
+                        next.gift.targetType === 'habitStreak'
+                          ? 'dayGiftStreakTarget'
+                          : 'dayGiftCountTarget',
+                        {
+                          count: next.target,
+                          name:
+                            doc.habits.find((habit) => habit.id === next.gift.targetId)?.title ??
+                            t('missingTarget'),
+                        },
+                      )}
+                </span>
+                <ChevronRight size={14} aria-hidden="true" />
+              </NavLink>
+              <div className="day-gift-progress">
+                <span>
+                  {t(
+                    next.gift.targetType === 'habitStreak'
+                      ? 'dayGiftBestStreak'
+                      : next.gift.targetType === 'goal'
+                        ? 'dayGiftStepsProgress'
+                        : 'dayGiftWinsProgress',
+                  )}
+                </span>
+                <strong>
+                  {Math.min(next.current, next.target)} / {next.target}
+                </strong>
+              </div>
+              <Bar value={next.current} max={next.target} />
+              <p className="day-gift-remaining">
+                {next.gift.targetType === 'habitStreak'
+                  ? t('dayGiftCurrentStreak', {
+                      count: progress.habits[next.gift.targetId]?.current ?? 0,
+                    })
+                  : next.gift.targetType === 'goal'
+                    ? t('dayGiftStepsLeft', { count: next.target - next.current })
+                    : t('dayGiftWinsLeft', { count: next.target - next.current })}
+              </p>
+            </>
+          )}
+        </>
+      ) : latest ? (
+        <>
+          <span className="small-label">{t('dayGiftLatest')}</span>
+          <h4>{latest.title}</h4>
+          <p className="day-gift-enjoyed">
+            <CircleCheck size={15} aria-hidden="true" />
+            {t('claimed')} ·{' '}
+            {new Intl.DateTimeFormat(doc.preferences.language, { dateStyle: 'medium' }).format(
+              new Date(latest.claimedAt!),
+            )}
+          </p>
+          <p>{t('dayGiftNextMilestone')}</p>
+          {addGift}
+        </>
+      ) : (
+        <>
+          <h4>{t('dayGiftEmptyTitle')}</h4>
+          <p>{t(canAddGift ? 'dayGiftEmptyDescription' : 'dayGiftNeedsTarget')}</p>
+          {addGift}
+        </>
+      )}
+      {gifts.length > 0 && (
+        <NavLink to="/rewards" className="text-button day-gift-footer">
+          {t('viewAllRewards')}
+          <ChevronRight size={16} aria-hidden="true" />
+        </NavLink>
+      )}
+    </section>
   );
 }
 
