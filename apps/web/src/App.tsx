@@ -22,7 +22,13 @@ import { buildInfo } from './buildInfo';
 import { Avatar } from './Avatar';
 import { AvatarEditor, type AvatarValue } from './AvatarEditor';
 import { NotificationsPanel } from './NotificationsPanel';
-import { reconcileDeviceNotifications } from './notifications';
+import {
+  enableDeviceNotifications,
+  notificationSupport,
+  reconcileDeviceNotifications,
+  type NotificationConfig,
+} from './notifications';
+import { deviceNotifications } from './notificationState';
 import {
   ArrowDown,
   ArrowUp,
@@ -44,6 +50,7 @@ import {
   X,
   Pencil,
   Archive,
+  Bell,
   RefreshCw,
   Download,
   Lock,
@@ -84,6 +91,7 @@ import {
   syncEntry,
   subscribeEntries,
   mutate,
+  request,
   switchLocalUser,
   toggleCompletion,
   visibleSnapshot,
@@ -150,6 +158,115 @@ async function applyUpdate() {
   navigator.serviceWorker.addEventListener('controllerchange', reload, { once: true });
   waiting.addEventListener('statechange', () => waiting.state === 'activated' && reload());
   waiting.postMessage({ type: 'SKIP_WAITING' });
+}
+function isStandalone() {
+  return (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    !!(navigator as Navigator & { standalone?: boolean }).standalone
+  );
+}
+const hintKey = (hint: 'install' | 'notifications') => `machbar-hint-${hint}`;
+function hintSeen(hint: 'install' | 'notifications') {
+  try {
+    return localStorage.getItem(hintKey(hint)) !== null;
+  } catch {
+    return true;
+  }
+}
+function markHintSeen(hint: 'install' | 'notifications') {
+  try {
+    localStorage.setItem(hintKey(hint), '1');
+  } catch {
+    // Without storage the hint simply shows again next session.
+  }
+}
+// One-time banners for installing the app and enabling notifications, shown one at a time.
+function SetupHints() {
+  const { t } = useTranslation();
+  const { snapshot, install, notify, online } = useApp();
+  const userId = snapshot.document.userId;
+  const [showInstall, setShowInstall] = useState(() => !hintSeen('install') && !isStandalone());
+  const [notificationConfig, setNotificationConfig] = useState<NotificationConfig | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (
+      showInstall ||
+      !online ||
+      hintSeen('notifications') ||
+      notificationSupport() ||
+      Notification.permission !== 'default'
+    )
+      return;
+    let disposed = false;
+    void (async () => {
+      if ((await deviceNotifications()).active?.userId === userId) return;
+      const config = await request<NotificationConfig>('/api/notifications/config');
+      if (!disposed && config.available && config.publicKey) setNotificationConfig(config);
+    })().catch(() => {});
+    return () => {
+      disposed = true;
+    };
+  }, [showInstall, online, userId]);
+  function dismissInstall() {
+    markHintSeen('install');
+    setShowInstall(false);
+  }
+  function dismissNotifications() {
+    markHintSeen('notifications');
+    setNotificationConfig(null);
+  }
+  async function enableNotifications() {
+    setBusy(true);
+    try {
+      await enableDeviceNotifications(userId, notificationConfig!);
+      notify(t('notificationsEnabled'));
+    } catch (error) {
+      notify(t(error instanceof ApiError ? error.code : 'NOTIFICATION_DELIVERY_FAILED'));
+    } finally {
+      setBusy(false);
+      dismissNotifications();
+    }
+  }
+  if (showInstall)
+    return (
+      <div className="notice" role="status">
+        <div>
+          <Download size={18} />
+          <span>{t('installHint')}</span>
+        </div>
+        <div>
+          <button
+            onClick={() => {
+              dismissInstall();
+              void install();
+            }}
+          >
+            {t('installShort')}
+          </button>
+          <button aria-label={t('close')} onClick={dismissInstall}>
+            <X size={16} />
+          </button>
+        </div>
+      </div>
+    );
+  if (notificationConfig)
+    return (
+      <div className="notice" role="status">
+        <div>
+          <Bell size={18} />
+          <span>{t('notificationsHint')}</span>
+        </div>
+        <div>
+          <button disabled={busy} onClick={() => void enableNotifications()}>
+            {t('enableShort')}
+          </button>
+          <button aria-label={t('close')} disabled={busy} onClick={dismissNotifications}>
+            <X size={16} />
+          </button>
+        </div>
+      </div>
+    );
+  return null;
 }
 const colors = ['sage', 'peach', 'lavender', 'blue'] as const;
 const badgeDefinitions = [
@@ -753,6 +870,9 @@ export function App() {
                     {t('update')}
                   </button>
                 </div>
+              )}
+              {!needRefresh && preferences!.onboarded && (
+                <SetupHints key={snapshot.document.userId} />
               )}
             </div>
             <Routes>
