@@ -1271,16 +1271,9 @@ function Today() {
     )[0];
   return (
     <>
-      <Heading
-        title={t('greeting', { name: doc.preferences.name })}
-        subtitle={t('todaySubtitle')}
-      />
+      <h1 className="visually-hidden">{t('greeting', { name: doc.preferences.name })}</h1>
       <section className="daily-hero">
         <div className="hero-copy">
-          <span className="small-label">
-            <span className="tiny-dot" />
-            {t('dailyProgress')}
-          </span>
           <h2>
             <span className="hero-headline-reserve" aria-hidden="true">
               {t('keepGoing')}
