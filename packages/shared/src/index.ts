@@ -230,6 +230,8 @@ export type Progress = {
   levelXp: number;
   wins: number;
   badges: string[];
+  /** Local date on which each earned badge was reached. */
+  badgeDates: Record<string, string>;
   habits: Record<string, { count: number; current: number; best: number }>;
   goals: Record<
     string,
@@ -350,12 +352,23 @@ export function createUser(userId: string): UserDocument {
   };
 }
 export function progressFor(doc: UserDocument, now = new Date()): Progress {
-  const wins = Object.values(doc.completions).filter((c) => c.completed).length;
+  const winDates = Object.values(doc.completions)
+    .filter((c) => c.completed)
+    .map((c) => c.date)
+    .sort();
+  const wins = winDates.length;
+  const badgeDates: Record<string, string> = {};
+  const earn = (badge: string, date: string) => {
+    if (!badgeDates[badge] || date < badgeDates[badge]) badgeDates[badge] = date;
+  };
+  const streakThresholds = [3, 7, 30];
   const habits: Progress['habits'] = {};
   for (const habit of doc.habits) {
     let run = 0,
       best = 0,
-      count = 0;
+      count = 0,
+      // A streak exists once its latest completion was logged.
+      runDate = '';
     const endTime = habit.archivedAt ? new Date(habit.archivedAt) : now;
     const currentTimezone =
       habit.schedules.filter((s) => s.from <= localDate(s.timezone, endTime)).at(-1)?.timezone ??
@@ -366,18 +379,28 @@ export function progressFor(doc: UserDocument, now = new Date()): Progress {
       const schedule = scheduleFor(habit, date)!;
       // Legacy history carries streaks across weekday edits. Only new edits
       // explicitly request a reset, once when their schedule starts.
-      if (previousSchedule && previousSchedule !== schedule && schedule.resetStreak) run = 0;
+      if (previousSchedule && previousSchedule !== schedule && schedule.resetStreak) {
+        run = 0;
+        runDate = '';
+      }
       previousSchedule = schedule;
       const occurrence = occurrenceFor(habit, date);
       if (!occurrence) {
         date = addDays(date, 1);
         continue;
       }
-      if (doc.completions[completionKey('habit', habit.id, occurrence.start)]?.completed) {
+      const completion = doc.completions[completionKey('habit', habit.id, occurrence.start)];
+      if (completion?.completed) {
         count++;
         run++;
         best = Math.max(best, run);
-      } else if (occurrence.end < end) run = 0;
+        if (completion.date > runDate) runDate = completion.date;
+        for (const threshold of streakThresholds)
+          if (run === threshold) earn(`streak-${threshold}`, runDate);
+      } else if (occurrence.end < end) {
+        run = 0;
+        runDate = '';
+      }
       date = addDays(occurrence.end, 1);
     }
     habits[habit.id] = { count, current: run, best };
@@ -403,11 +426,14 @@ export function progressFor(doc: UserDocument, now = new Date()): Progress {
         : null,
     };
   }
-  const badges: string[] = [];
-  for (const threshold of [1, 10, 50, 100]) if (wins >= threshold) badges.push(`wins-${threshold}`);
-  if (Object.values(goals).some((g) => g.done)) badges.push('first-goal');
-  for (const threshold of [3, 7, 30])
-    if (Object.values(habits).some((h) => h.best >= threshold)) badges.push(`streak-${threshold}`);
+  for (const threshold of [1, 10, 50, 100])
+    if (wins >= threshold) earn(`wins-${threshold}`, winDates[threshold - 1]!);
+  for (const goal of Object.values(goals))
+    if (goal.completedOn) earn('first-goal', goal.completedOn);
+  const badges = [
+    ...['wins-1', 'wins-10', 'wins-50', 'wins-100', 'first-goal'],
+    ...streakThresholds.map((threshold) => `streak-${threshold}`),
+  ].filter((badge) => badgeDates[badge]);
   const gifts: Progress['gifts'] = {};
   for (const gift of doc.gifts) {
     const current =
@@ -430,6 +456,7 @@ export function progressFor(doc: UserDocument, now = new Date()): Progress {
     level: 1 + Math.floor(xp / 100),
     levelXp: xp % 100,
     badges,
+    badgeDates,
     habits,
     goals,
     gifts,

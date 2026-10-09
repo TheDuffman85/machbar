@@ -153,6 +153,16 @@ describe('progress, streaks and rewards', () => {
     doc.gifts[0]!.claimedAt = now.toISOString();
     expect(progressFor(doc, now).gifts[giftId]!.state).toBe('claimed');
   });
+  it('dates badges on the day they were reached', () => {
+    const { doc, id } = fixture();
+    ['2026-10-01', '2026-10-05', '2026-10-02'].forEach((date) => check(doc, id, date));
+    expect(progressFor(doc, now).badgeDates).toEqual({
+      'wins-1': '2026-10-01',
+      'streak-3': '2026-10-05',
+    });
+    applyCompletion(doc, operation(id, '2026-10-02', false, 1), now);
+    expect(progressFor(doc, now).badgeDates).toEqual({ 'wins-1': '2026-10-01' });
+  });
   it('treats goals without steps as one explicit completion, including rewards and undo', () => {
     const doc = createUser(randomUUID());
     const id = randomUUID();

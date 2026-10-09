@@ -34,6 +34,7 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpRight,
+  Award,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -1248,6 +1249,9 @@ function Today() {
   const completedGoals = doc.goals.filter(
     (goal) => !goal.archivedAt && progress.goals[goal.id]!.completedOn === date,
   );
+  const reachedBadges = badgeDefinitions
+    .map((badge, index) => ({ badge, color: colors[index % colors.length] }))
+    .filter(({ badge: [id] }) => progress.badgeDates[id] === date);
   const total = habits.length + steps.length;
   const completed =
     habits.filter((h) => doc.completions[operationKey(doc, 'habit', h.id, date)]?.completed)
@@ -1392,6 +1396,29 @@ function Today() {
                   <span className="task-copy">
                     <strong>{goal.title}</strong>
                     <span>{t('goalCompleted')}</span>
+                  </span>
+                  <ArrowUpRight size={18} aria-hidden="true" />
+                </NavLink>
+              ))}
+            </section>
+          )}
+          {reachedBadges.length > 0 && (
+            <section className="completed-goals" aria-labelledby="reached-badges-heading">
+              <div className="section-heading">
+                <h2 id="reached-badges-heading">
+                  <Award size={18} aria-hidden="true" />
+                  {t('reachedAchievements')}
+                  <span className="count-pill">{reachedBadges.length}</span>
+                </h2>
+              </div>
+              {reachedBadges.map(({ badge: [id, name, description, count, Icon], color }) => (
+                <NavLink className="completed-goal" to="/rewards" key={id}>
+                  <span className={`task-icon ${color}`}>
+                    <Icon size={22} />
+                  </span>
+                  <span className="task-copy">
+                    <strong>{t(name)}</strong>
+                    <span>{t(description, { count })}</span>
                   </span>
                   <ArrowUpRight size={18} aria-hidden="true" />
                 </NavLink>
@@ -1567,6 +1594,37 @@ function Today() {
                 </div>
               ))}
             <p>{t('streakExplanation')}</p>
+          </section>
+          <section className="panel achievements-card">
+            <h3>
+              <Trophy size={18} />
+              {t('achievements')}
+            </h3>
+            <strong className="achievements-count">
+              {progress.badges.length}
+              <small> / {badgeDefinitions.length}</small>
+            </strong>
+            <ul className="achievement-icons">
+              {badgeDefinitions.map(([id, name, , , Icon], index) => {
+                const earned = progress.badges.includes(id);
+                return (
+                  <li
+                    key={id}
+                    className={`${colors[index % colors.length]} ${earned ? 'earned' : ''}`}
+                    title={t(name)}
+                  >
+                    <Icon size={15} aria-hidden="true" />
+                    <span className="visually-hidden">
+                      {t(name)}: {t(earned ? 'earned' : 'locked')}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            <NavLink to="/rewards" className="text-button">
+              {t('viewAchievements')}
+              <ChevronRight size={16} />
+            </NavLink>
           </section>
           <section className="panel next-gift-card">
             <span className="gift-illustration">
@@ -1977,7 +2035,7 @@ function Rewards() {
           <Trophy />
           <strong>
             {progress.badges.length}
-            <small> / 8</small>
+            <small> / {badgeDefinitions.length}</small>
           </strong>
           <span>{t('achievements')}</span>
         </div>
@@ -2069,7 +2127,7 @@ function Rewards() {
       <div className="section-heading achievements-heading">
         <h2>{t('achievements')}</h2>
         <span className="muted">
-          {progress.badges.length} / 8 {t('earned')}
+          {progress.badges.length} / {badgeDefinitions.length} {t('earned')}
         </span>
       </div>
       <div className="badge-grid">

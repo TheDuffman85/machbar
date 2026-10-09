@@ -511,6 +511,12 @@ test('gift unlock, claiming and achievements', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Complete Take a little walk', exact: true }).click();
   await serverXp(page, 10);
+  const reached = page.getByRole('region', { name: 'Achievements reached on this day' });
+  await expect(reached).toContainText('The first step');
+  await expect(page.locator('.achievements-count')).toHaveText('1 / 8');
+  await page.screenshot({ path: `test-results/achievements-${test.info().project.name}.png` });
+  await page.getByRole('button', { name: 'Previous day', exact: true }).click();
+  await expect(reached).toHaveCount(0);
   await page.goto('/rewards');
   await expect(page.getByText('Ready for you', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'I treated myself', exact: true }).click();
@@ -525,6 +531,10 @@ test('gift unlock, claiming and achievements', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Undo Take a little walk', exact: true }).click();
   await serverXp(page, 0);
+  await expect(page.getByRole('region', { name: 'Achievements reached on this day' })).toHaveCount(
+    0,
+  );
+  await expect(page.locator('.achievements-count')).toHaveText('0 / 8');
   await page.goto('/rewards');
   await expect(page.getByText('Enjoyed', { exact: true })).toBeVisible();
   await expect(page.locator('.badge-card.earned')).toHaveCount(0);

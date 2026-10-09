@@ -933,6 +933,55 @@ h3 {
   border-top: 1px solid var(--line);
   padding-top: 13px;
 }
+.achievements-card {
+  padding: 22px;
+}
+.achievements-card h3 {
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.achievements-card h3 svg {
+  color: #bfa584;
+}
+.achievements-count {
+  display: block;
+  font-family: Georgia, serif;
+  font-size: 28px;
+  font-weight: 400;
+  margin: 12px 0 14px;
+}
+.achievements-count small {
+  font-size: 14px;
+  color: var(--muted);
+}
+.achievement-icons {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 5px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.achievement-icons li {
+  aspect-ratio: 1;
+  max-width: 32px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.achievement-icons li:not(.earned) {
+  color: var(--muted);
+  background: transparent;
+  border: 1px dashed var(--line);
+  opacity: 0.6;
+}
+.achievements-card .text-button {
+  margin-top: 16px;
+  font-size: 11px;
+}
 .empty {
   text-align: center;
   padding: 35px 20px;
@@ -2133,7 +2182,8 @@ legend {
     font-size: 14px;
   }
   .next-gift-card,
-  .streak-card {
+  .streak-card,
+  .achievements-card {
     padding: 19px;
   }
   .next-gift-card h3 {
@@ -2311,7 +2361,8 @@ legend {
     gap: 10px;
   }
   .next-gift-card,
-  .streak-card {
+  .streak-card,
+  .achievements-card {
     padding: 15px;
   }
   .theme-options {
