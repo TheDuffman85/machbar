@@ -64,6 +64,8 @@ async function saveProfile(name: string) {
   expect(response.statusCode).toBe(200);
   return userId;
 }
+// The profile cards, without the times shown by the panels above them.
+const profileList = (page: string) => page.slice(page.indexOf('<h2 class="section">Profiles'));
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'machbar-admin-'));
 });
@@ -149,7 +151,9 @@ describe('admin page', () => {
     expect(response.body).toContain(`/admin/profiles/${userId}/delete`);
     expect(response.body).toContain('src="data:image/svg+xml');
     expect(response.body).toMatch(/Profiles<\/dt>\s*<dd>1 \/ 100 /);
-    const times = [...response.body.matchAll(/<time datetime="([^"]+)"/g)].map((m) => m[1]!);
+    const times = [...profileList(response.body).matchAll(/<time datetime="([^"]+)"/g)].map(
+      (m) => m[1]!,
+    );
     expect(times).toHaveLength(2);
     for (const time of times) expect(Date.parse(time)).toBeGreaterThanOrEqual(before - 1000);
     const script = await app.inject({ url: '/admin/admin.js', headers: { cookie: valid } });
@@ -176,7 +180,7 @@ describe('admin page', () => {
     });
     const body = (await app.inject({ url: '/admin', headers: { cookie: valid } })).body;
     // Rendered as last sync, then created.
-    const times = [...body.matchAll(/<time datetime="([^"]+)"/g)].map((m) => m[1]!);
+    const times = [...profileList(body).matchAll(/<time datetime="([^"]+)"/g)].map((m) => m[1]!);
     expect(times[0]).not.toBe('2020-01-01T00:00:00.000Z');
     expect(times[1]).toBe('2020-01-01T00:00:00.000Z');
   });
@@ -213,6 +217,35 @@ describe('admin page', () => {
 
     expect((await toggle('0')).statusCode).toBe(303);
     expect((await bootstrap()).statusCode).toBe(403);
+  });
+
+  it('shows the rate limits and the clients they currently block', async () => {
+    await start({
+      ...credentials,
+      RATE_LIMIT_MAX_PER_USER: '2',
+      RATE_LIMIT_MAX_ANONYMOUS: '2',
+    });
+    const page = async () => (await app.inject({ url: '/admin', headers: { cookie: valid } })).body;
+    let body = await page();
+    expect(body).toContain('No active bans');
+    expect(body).toContain('Nobody is blocked right now.');
+    expect(body).toContain('Counted in fixed windows of 60 seconds');
+
+    // Bootstrap and the first sync use up the profile's allowance of two requests.
+    const userId = await saveProfile('Erin <3');
+    for (let attempt = 0; attempt < 3; attempt++) await app.inject({ url: '/api/bootstrap' });
+    for (let attempt = 0; attempt < 10; attempt++) await login('wrong password!');
+    body = await page();
+    expect(body).toContain('3 active bans');
+    expect(body).toMatch(
+      /API requests per profile<\/span> Erin &lt;3 <code>[\w-]{8}<\/code> <span class="muted">2 \/ 2/,
+    );
+    expect(body).toContain(`<code>${userId.slice(0, 8)}</code>`);
+    expect(body).toMatch(/Requests without a valid ID<\/span> <code>127\.0\.0\.1<\/code>/);
+    expect(body).toMatch(
+      /Admin sign-in<\/span> <code>127\.0\.0\.1<\/code> <span class="muted">10 failed attempts/,
+    );
+    expect(body).not.toContain('Nobody is blocked right now.');
   });
 
   it('remembers the chosen theme in a cookie', async () => {

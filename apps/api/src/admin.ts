@@ -9,6 +9,7 @@ import { removeUserBindings, type PushStore } from './notifications.js';
 import type { SqliteStore } from './store.js';
 import { verifyAdminPassword } from './hash-admin-password.js';
 import type { UserCreation } from './user-creation.js';
+import type { RateLimiter, RateLimitBlock, RateLimitStatus } from './rate-limit.js';
 
 type ProfileRow = {
   userId: string;
@@ -32,6 +33,10 @@ type ProfileRow = {
   lastCompletion: string | null;
   devices: number;
 };
+type RateLimits = {
+  api: RateLimitStatus;
+  login: { resetAt: number; tracked: number; lockouts: Array<{ ip: string; count: number }> };
+};
 
 export const adminDeleteRoute = '/admin/profiles/:userId/delete';
 // The only non-API POST routes; server.ts rejects every other non-GET request.
@@ -49,6 +54,9 @@ type Theme = 'light' | 'dark' | 'system';
 const creationWindows = [15, 60, 24 * 60];
 const sessionSeconds = 12 * 60 * 60;
 const maxSessions = 100;
+const maxLoginFailures = 10;
+// Listed bans per kind; an attack can fill thousands of counters.
+const maxListedBans = 50;
 const digest = (value: string) => createHash('sha256').update(value).digest();
 const escape = (value: string) =>
   value.replace(
@@ -72,6 +80,7 @@ export function registerAdmin(
   database: SqliteDatabase,
   push: PushStore,
   userCreation: UserCreation,
+  rateLimiter: RateLimiter,
 ) {
   const credentials = config.admin;
   if (!credentials) return;
@@ -97,15 +106,25 @@ export function registerAdmin(
   // Failed logins per IP in a fixed window. Fail closed when the table is full.
   const failures = new Map<string, number>();
   let resetAt = 0;
-  const lockedFor = (ip: string) => {
+  const resetFailures = () => {
     if (Date.now() >= resetAt) {
       failures.clear();
       resetAt = Date.now() + config.rateLimitWindowSeconds * 1000;
     }
+  };
+  const lockedFor = (ip: string) => {
+    resetFailures();
     const failed = failures.get(ip) ?? 0;
-    return failed >= 10 || (failed === 0 && failures.size >= 10_000)
+    return failed >= maxLoginFailures || (failed === 0 && failures.size >= 10_000)
       ? Math.max(1, Math.ceil((resetAt - Date.now()) / 1000))
       : 0;
+  };
+  const rateLimits = (): RateLimits => {
+    resetFailures();
+    const lockouts = [...failures]
+      .filter(([, count]) => count >= maxLoginFailures)
+      .map(([ip, count]) => ({ ip, count }));
+    return { api: rateLimiter.status(), login: { resetAt, tracked: failures.size, lockouts } };
   };
   // Only a display preference, so a plain cookie readable by any /admin request.
   const theme = (request: FastifyRequest): Theme => {
@@ -208,7 +227,9 @@ export function registerAdmin(
       const message = notice === '1' ? 'deleted' : notice === '0' ? 'missing' : undefined;
       return reply
         .type('text/html; charset=utf-8')
-        .send(renderPage(await profiles(), config, userCreation, theme(request), message));
+        .send(
+          renderPage(await profiles(), rateLimits(), config, userCreation, theme(request), message),
+        );
     };
     admin.get('/admin', page);
     admin.get('/admin/', page);
@@ -298,6 +319,7 @@ for (const time of document.querySelectorAll('time[datetime]')) {
   time.title = date.toLocaleString();
   const seconds = (date.getTime() - Date.now()) / 1000;
   if (!time.hasAttribute('data-relative')) time.textContent = date.toLocaleString();
+  else if (seconds > 0 && seconds < 60) time.textContent = relative.format(Math.ceil(seconds), 'second');
   else if (Math.abs(seconds) < 60) time.textContent = 'just now';
   else {
     const [unit, size] = units.find(([, size]) => Math.abs(seconds) >= size);
@@ -379,8 +401,87 @@ function creationPanel(config: Config, userCreation: UserCreation) {
 </section>`;
 }
 
+const banLabels: Record<RateLimitBlock['scope'], string> = {
+  ip: 'API requests per IP',
+  user: 'API requests per profile',
+  anonymous: 'Requests without a valid ID',
+  creation: 'New profiles',
+};
+const banOrder = Object.keys(banLabels);
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+// Configured limits and the counters that currently answer 429. Counters live in
+// memory per fixed window, so a ban always ends when its window resets.
+function rateLimitPanel({ api, login }: RateLimits, config: Config, rows: ProfileRow[]) {
+  const names = new Map(rows.map((row) => [row.userId, row.name]));
+  const until = (resetAt: number) => time(new Date(resetAt).toISOString(), '', true);
+  const who = ({ scope, key }: RateLimitBlock) => {
+    if (scope === 'creation' && key === 'global') return 'all addresses';
+    if (scope !== 'user') return `<code>${escape(key)}</code>`;
+    const name = names.get(key);
+    return name === undefined
+      ? `<code>${escape(key.slice(0, 8))}</code> <span class="muted">no saved profile</span>`
+      : `${escape(name)} <code>${escape(key.slice(0, 8))}</code>`;
+  };
+  const blocked = [...api.blocked].sort(
+    (a, b) => banOrder.indexOf(a.scope) - banOrder.indexOf(b.scope) || b.count - a.count,
+  );
+  const bans = [
+    ...(api.tracked >= api.capacity
+      ? [
+          `<li class="alert"><span>Counter table full</span> <span class="muted">Requests from new IPs and IDs are rejected · resets ${until(api.resetAt)}</span></li>`,
+        ]
+      : []),
+    ...(login.tracked >= 10_000
+      ? [
+          `<li class="alert"><span>Admin sign-in table full</span> <span class="muted">Sign-ins from new IPs are rejected · resets ${until(login.resetAt)}</span></li>`,
+        ]
+      : []),
+    ...blocked
+      .slice(0, maxListedBans)
+      .map(
+        (ban) =>
+          `<li><span>${banLabels[ban.scope]}</span> ${who(ban)} <span class="muted">${ban.count} / ${ban.limit} · lifted ${until(api.resetAt)}</span></li>`,
+      ),
+    ...login.lockouts
+      .slice(0, maxListedBans)
+      .map(
+        ({ ip, count }) =>
+          `<li><span>Admin sign-in</span> <code>${escape(ip)}</code> <span class="muted">${plural(count, 'failed attempt')} · lifted ${until(login.resetAt)}</span></li>`,
+      ),
+  ];
+  const hidden =
+    Math.max(0, blocked.length - maxListedBans) +
+    Math.max(0, login.lockouts.length - maxListedBans);
+  const active = api.blocked.length + login.lockouts.length;
+  const full = api.tracked >= api.capacity || login.tracked >= 10_000;
+  return `<section class="panel limits" aria-labelledby="limits-title">
+  <div class="limits-head">
+    <div>
+      <h2 id="limits-title">Rate limits</h2>
+      <p class="muted">Counted in fixed windows of ${plural(config.rateLimitWindowSeconds, 'second')}; the current one resets ${until(api.resetAt)}. Counters are kept in memory and cleared on restart.</p>
+    </div>
+    <span class="badge${active || full ? ' alert' : ''}">${active ? plural(active, 'active ban') : full ? 'Counters full' : 'No active bans'}</span>
+  </div>
+  <dl class="stats">
+    ${stat('Per IP', config.rateLimitMaxPerIp, 'API requests')}
+    ${stat('Per profile', config.rateLimitMaxPerUser, 'across devices')}
+    ${stat('Without ID', config.rateLimitMaxAnonymous, 'per IP')}
+    ${stat('New profiles', config.rateLimitMaxNewUsers, 'per IP and in total')}
+    ${stat('Admin sign-in', maxLoginFailures, 'failures per IP')}
+    ${stat('Counters', `${api.tracked.toLocaleString('en')} / ${api.capacity.toLocaleString('en')}`, 'tracked this window')}
+  </dl>
+  <h3>Currently blocked</h3>
+  ${
+    bans.length
+      ? `<ul class="bans">\n    ${bans.join('\n    ')}${hidden ? `\n    <li class="muted">and ${hidden} more</li>` : ''}\n  </ul>`
+      : '<p class="muted">Nobody is blocked right now.</p>'
+  }
+</section>`;
+}
+
 function renderPage(
   { rows, deleted }: { rows: ProfileRow[]; deleted: number },
+  limits: RateLimits,
   config: Config,
   userCreation: UserCreation,
   theme: Theme,
@@ -438,6 +539,7 @@ ${notice === 'missing' ? '<p class="notice" role="status">That profile no longer
   </div>
 </dl>
 ${creationPanel(config, userCreation)}
+${rateLimitPanel(limits, config, rows)}
 <h2 class="section">Profiles</h2>
 ${rows.length ? `<ul>\n${cards}\n</ul>` : '<p class="empty muted">No saved profiles yet.</p>'}
 </main>
@@ -524,6 +626,15 @@ ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
 .creation { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; }
 .creation > div { flex: 1 1 280px; }
 .windows { display: flex; flex-wrap: wrap; gap: 8px; }
+.limits { margin-top: 12px; }
+.limits-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 24px; }
+.limits-head > div { flex: 1 1 280px; }
+.limits h3 { margin: 16px 0 6px; font-size: .9rem; }
+.bans { gap: 0; }
+.bans li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 8px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.bans li > span:first-child { font-weight: 600; }
+.bans li.alert > span:first-child { color: var(--danger); }
+.badge.alert { background: var(--danger); color: var(--danger-text); }
 .section { margin: 28px 0 12px; font-size: 1.1rem; }
 .card { padding: 16px; }
 .card header { display: flex; gap: 12px; align-items: center; }

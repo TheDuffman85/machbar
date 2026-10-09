@@ -103,7 +103,7 @@ export async function buildServer(
     )
       return reply.code(404).send({ code: 'NOT_FOUND' });
   });
-  const admitUser = registerRateLimits(app, config);
+  const rateLimiter = registerRateLimits(app, config);
   registerIdentity(app, config);
   let inFlight = 0;
   app.decorateRequest('holdsApiSlot', false);
@@ -157,7 +157,7 @@ export async function buildServer(
     };
   });
   const push = registerNotifications(app, config, store, options.notifications, budget);
-  registerAdmin(app, config, store, budget.database, push, userCreation);
+  registerAdmin(app, config, store, budget.database, push, userCreation, rateLimiter);
   const bootstrap = (document: Awaited<ReturnType<SqliteStore['read']>>) => ({
     document,
     dailyHistoryDays: config.dailyHistoryDays,
@@ -177,7 +177,7 @@ export async function buildServer(
       if (!(await store.exists(request.userId))) {
         if (await store.deleted(request.userId)) throw new DomainError('PROFILE_DELETED', 410);
         if (!userCreation.allowed()) throw new DomainError('USER_CREATION_DISABLED', 403);
-        if (!admitUser(request.ip))
+        if (!rateLimiter.admitUser(request.ip))
           return reply
             .code(429)
             .header('Retry-After', String(config.rateLimitWindowSeconds))

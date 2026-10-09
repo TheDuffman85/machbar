@@ -3,7 +3,21 @@ import { localUserIdSchema } from '@machbar/shared';
 import type { Config } from './config.js';
 import { isApiRequest } from './api-request.js';
 
-export function registerRateLimits(app: FastifyInstance, config: Config) {
+export type RateLimitScope = 'ip' | 'user' | 'anonymous' | 'creation';
+// A counter that has reached its limit; its requests get 429 until resetAt.
+export type RateLimitBlock = { scope: RateLimitScope; key: string; count: number; limit: number };
+export type RateLimitStatus = {
+  resetAt: number;
+  tracked: number;
+  capacity: number;
+  blocked: RateLimitBlock[];
+};
+export type RateLimiter = {
+  admitUser(ip: string): boolean;
+  status(): RateLimitStatus;
+};
+
+export function registerRateLimits(app: FastifyInstance, config: Config): RateLimiter {
   // One fixed window per process. Bound memory and fail closed when full;
   // evicting active counters would let rotating identities bypass the limits.
   const counters = new Map<string, number>();
@@ -47,12 +61,31 @@ export function registerRateLimits(app: FastifyInstance, config: Config) {
         .send({ code: 'RATE_LIMITED' });
   });
   app.addHook('onClose', async () => counters.clear());
-  return (ip: string): boolean => {
-    reset();
-    // Global admission also bounds creation spread across addresses and UUIDs.
-    return consume([
-      ['creation:global', config.rateLimitMaxNewUsers],
-      [`creation:${ip}`, config.rateLimitMaxNewUsers],
-    ]);
+  const limits: Record<RateLimitScope, number> = {
+    ip: config.rateLimitMaxPerIp,
+    user: config.rateLimitMaxPerUser,
+    anonymous: config.rateLimitMaxAnonymous,
+    creation: config.rateLimitMaxNewUsers,
+  };
+  return {
+    admitUser: (ip) => {
+      reset();
+      // Global admission also bounds creation spread across addresses and UUIDs.
+      return consume([
+        ['creation:global', config.rateLimitMaxNewUsers],
+        [`creation:${ip}`, config.rateLimitMaxNewUsers],
+      ]);
+    },
+    status: () => {
+      reset();
+      const blocked: RateLimitBlock[] = [];
+      for (const [counter, count] of counters) {
+        const split = counter.indexOf(':');
+        const scope = counter.slice(0, split) as RateLimitScope;
+        if (count >= limits[scope])
+          blocked.push({ scope, key: counter.slice(split + 1), count, limit: limits[scope] });
+      }
+      return { resetAt, tracked: counters.size, capacity: maxCounters, blocked };
+    },
   };
 }
