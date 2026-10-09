@@ -19,14 +19,16 @@ Machbar is a self-hosted, mobile-first app for building habits, breaking goals i
 
 ## Features
 
-- **Flexible habits:** daily, selected weekdays, weekly, monthly, or custom intervals, with streaks and recent-day checkoffs.
+- **Flexible habits:** daily, selected weekdays, weekly, monthly, or custom intervals, with streaks, past-day logging, and archiving that keeps your history.
 - **Goals in small steps:** dated or undated steps, reordering, and a Today view that brings your next actions together.
 - **Progress you can see:** 10 XP per win, a new level every 100 XP, achievement badges, and a growing plant.
 - **Rewards for yourself:** unlock gifts by completing a goal, reaching a habit completion count, or building a streak.
-- **Offline use and device sync:** edit, check off, and save locally; changes sync automatically when you reconnect.
-- **Optional habit reminders:** Web Push notifications with a reminder time for each habit.
+- **Offline use and device sync:** edit, check off, and save locally; changes sync automatically when you reconnect, with a sync log and in-app update prompts.
+- **No passwords for your profile:** open the same profile on another device by entering its private ID or scanning its QR code.
+- **Optional habit reminders:** Web Push notifications with a reminder time for each habit, plus one-time hints to install the app and turn on notifications.
 - **Make it yours:** custom avatars, challenge icons and colors, light/dark themes, English/German, and timezone-aware schedules.
 - **Self-hosted storage:** profiles and progress live in SQLite on your server, with Docker and Compose support.
+- **Optional admin page:** a hidden, password-protected page to review profiles, delete them, and temporarily open sign-ups.
 
 ## Screenshots
 
@@ -38,7 +40,11 @@ Today brings your habits, goal steps, streaks, and next reward together.
 | :---------------------------------------------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------------: |
 | <img src="docs/images/habits-mobile.png" alt="Mobile habits view with schedules and streaks" width="260" /> | <img src="docs/images/goals-mobile.png" alt="Mobile goals view with steps and completion progress" width="260" /> | <img src="docs/images/rewards-mobile.png" alt="Mobile rewards view with milestone gifts and XP" width="260" /> |
 
-Screenshots use a demo profile.
+The optional admin page shows every profile with its usage, lets you delete profiles, and can open sign-ups for a limited time.
+
+![Machbar admin page listing profiles with stats, storage usage, and temporary user creation controls](docs/images/admin-desktop.png)
+
+Screenshots use demo profiles.
 
 ## Installation
 
