@@ -315,7 +315,7 @@ describe('local feature mutations', () => {
     );
     expect(goal.steps[0]!.archivedAt).toBe(now.toISOString());
     mutateDocument(base, `/api/steps/${goal.steps[1]!.id}`, 'DELETE', undefined, randomUUID(), now);
-    expect(goal.steps).toHaveLength(2);
+    expect(goal.steps).toHaveLength(1);
     expect(goal.steps.every((s) => s.archivedAt)).toBe(true);
     applyCompletion(
       base,

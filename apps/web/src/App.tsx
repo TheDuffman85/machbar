@@ -52,6 +52,7 @@ import {
   X,
   Pencil,
   Archive,
+  Trash2,
   Bell,
   RefreshCw,
   Download,
@@ -76,6 +77,8 @@ import {
   scheduled,
   scheduleFor,
   same,
+  canDeleteItem,
+  type RemovableKind,
   type Bootstrap,
   type CompletionOperation,
   type Goal,
@@ -986,7 +989,7 @@ export function App() {
         {modal && (
           <Modal
             className={modal.kind === 'avatar' ? 'avatar-modal' : ''}
-            dismissible={modal.kind !== 'avatar' || !busy}
+            dismissible={(modal.kind !== 'avatar' && modal.kind !== 'confirm') || !busy}
             title={
               modal.kind === 'confirm'
                 ? modal.title
@@ -1031,15 +1034,21 @@ export function App() {
               <AvatarForm modal={modal} />
             ) : modal.kind === 'confirm' ? (
               <div className="form-actions">
-                <button className="button secondary" data-autofocus onClick={() => setModal(null)}>
+                <button
+                  className="button secondary"
+                  data-autofocus
+                  disabled={busy}
+                  onClick={() => setModal(null)}
+                >
                   {t('cancel')}
                 </button>
                 <button
                   className="button primary"
                   disabled={busy}
                   onClick={() => {
-                    setModal(null);
-                    void modal.onConfirm();
+                    void (async () => {
+                      if ((await modal.onConfirm()) !== false) setModal(null);
+                    })();
                   }}
                 >
                   {modal.confirmLabel}
@@ -1238,11 +1247,17 @@ function Today() {
       steps.filter((step) => !doc.completions[completionKey('step', step.id, '')]?.completed)
         .length > 1,
   );
-  const standaloneGoals = doc.goals.filter((goal) => {
+  const availableStandaloneGoals = doc.goals.filter((goal) => {
     if (goal.archivedAt || goal.steps.some((step) => !step.archivedAt)) return false;
     const completion = doc.completions[completionKey('goal', goal.id, '')];
-    return completion?.completed ? completion.date === date : date === today;
+    return completion?.completed
+      ? completion.date === date
+      : goal.date
+        ? goal.date <= date
+        : date === today;
   });
+  const standaloneGoals = availableStandaloneGoals.filter((goal) => !goal.date);
+  const datedGoals = availableStandaloneGoals.filter((goal) => goal.date);
   const standaloneCompleted = standaloneGoals.filter(
     (goal) => progress.goals[goal.id]!.done,
   ).length;
@@ -1252,12 +1267,13 @@ function Today() {
   const reachedBadges = badgeDefinitions
     .map((badge, index) => ({ badge, color: colors[index % colors.length] }))
     .filter(({ badge: [id] }) => progress.badgeDates[id] === date);
-  const total = habits.length + steps.length;
+  const total = habits.length + steps.length + datedGoals.length;
   const completed =
     habits.filter((h) => doc.completions[operationKey(doc, 'habit', h.id, date)]?.completed)
       .length +
     steps.filter(({ step }) => doc.completions[completionKey('step', step.id, '')]?.completed)
-      .length;
+      .length +
+    datedGoals.filter((goal) => progress.goals[goal.id]!.done).length;
   const selectedDateLabel = new Intl.DateTimeFormat(i18n.language, {
     dateStyle: 'medium',
     timeZone: 'UTC',
@@ -1489,27 +1505,42 @@ function Today() {
           <div className="section-heading steps-heading">
             <h2>
               {t('goalSteps')}
-              <span className="count-pill">{steps.length}</span>
+              <span className="count-pill">{steps.length + datedGoals.length}</span>
             </h2>
             <NavLink to="/goals" aria-label={t('goals')} className="text-button">
               <ArrowUpRight size={17} />
             </NavLink>
           </div>
           <div className="panel task-list">
-            {steps.length ? (
-              steps.map(({ step, goal }) => (
-                <TaskRow
-                  key={step.id}
-                  type="step"
-                  id={step.id}
-                  title={step.title}
-                  subtitle={`${goal.title} · ${t(step.date! < date ? 'overdue' : 'dueToday')}`}
-                  date={date}
-                  timezone={doc.preferences.timezone}
-                  color={goal.color}
-                  icon={step.icon}
-                />
-              ))
+            {steps.length || datedGoals.length ? (
+              <>
+                {datedGoals.map((goal) => (
+                  <TaskRow
+                    key={goal.id}
+                    type="goal"
+                    id={goal.id}
+                    title={goal.title}
+                    subtitle={t(goal.date! < date ? 'overdue' : 'dueToday')}
+                    date={date}
+                    timezone={doc.preferences.timezone}
+                    color={goal.color}
+                    icon={goal.icon}
+                  />
+                ))}
+                {steps.map(({ step, goal }) => (
+                  <TaskRow
+                    key={step.id}
+                    type="step"
+                    id={step.id}
+                    title={step.title}
+                    subtitle={`${goal.title} · ${t(step.date! < date ? 'overdue' : 'dueToday')}`}
+                    date={date}
+                    timezone={doc.preferences.timezone}
+                    color={goal.color}
+                    icon={step.icon}
+                  />
+                ))}
+              </>
             ) : (
               <div className="quiet-empty">
                 <Target size={19} />
@@ -1655,6 +1686,42 @@ function Today() {
   );
 }
 
+function RemoveItemButton({
+  kind,
+  id,
+  title,
+  className = 'icon-button',
+}: {
+  kind: RemovableKind;
+  id: string;
+  title: string;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  const { snapshot, setModal, action, busy } = useApp();
+  const deletion = canDeleteItem(snapshot.document, kind, id);
+  const label = deletion ? 'delete' : 'archive';
+  const Icon = deletion ? Trash2 : Archive;
+  return (
+    <button
+      className={className}
+      aria-label={`${t(label)} ${title}`}
+      disabled={busy}
+      onClick={() =>
+        setModal({
+          kind: 'confirm',
+          title: t(label),
+          message: t(deletion ? 'deleteConfirm' : 'archiveConfirm', { title }),
+          confirmLabel: t(label),
+          onConfirm: () => action(`/api/${kind}/${id}`, 'DELETE'),
+        })
+      }
+    >
+      <Icon size={16} />
+    </button>
+  );
+}
+
 function Goals() {
   const { t } = useTranslation();
   const { snapshot, setModal, action, toggle, busy } = useApp();
@@ -1664,15 +1731,6 @@ function Goals() {
   const goals = doc.goals.filter((g) =>
     archived ? g.archivedAt || g.steps.some((s) => s.archivedAt) : !g.archivedAt,
   );
-  function archive(kind: string, id: string, title: string) {
-    setModal({
-      kind: 'confirm',
-      title: t('archive'),
-      message: t('archiveConfirm', { title }),
-      confirmLabel: t('archive'),
-      onConfirm: () => action(`/api/${kind}/${id}`, 'DELETE'),
-    });
-  }
   async function move(goal: Goal, index: number, delta: number) {
     const steps = goal.steps.filter((s) => !s.archivedAt);
     const order = goal.steps.map((s) => s.id);
@@ -1720,6 +1778,18 @@ function Goals() {
                   <div>
                     <h2>{goal.title}</h2>
                     {goal.description && <p>{goal.description}</p>}
+                    {goal.date && (
+                      <p>
+                        {goal.date} ·{' '}
+                        {t(
+                          goal.date < today
+                            ? 'overdue'
+                            : goal.date === today
+                              ? 'dueToday'
+                              : 'scheduledGoal',
+                        )}
+                      </p>
+                    )}
                     {!hasSteps && progress.done && (
                       <span className="goal-complete-status">
                         <CircleCheck size={14} />
@@ -1737,14 +1807,7 @@ function Goals() {
                       >
                         <Pencil size={16} />
                       </button>
-                      <button
-                        className="icon-button"
-                        aria-label={`${t('archive')} ${goal.title}`}
-                        disabled={busy}
-                        onClick={() => void archive('goals', goal.id, goal.title)}
-                      >
-                        <Archive size={16} />
-                      </button>
+                      <RemoveItemButton kind="goals" id={goal.id} title={goal.title} />
                     </div>
                   )}
                 </div>
@@ -1814,14 +1877,7 @@ function Goals() {
                               >
                                 <Pencil size={14} />
                               </button>
-                              <button
-                                className="icon-button"
-                                aria-label={`${t('archive')} ${step.title}`}
-                                disabled={busy}
-                                onClick={() => archive('steps', step.id, step.title)}
-                              >
-                                <Archive size={16} />
-                              </button>
+                              <RemoveItemButton kind="steps" id={step.id} title={step.title} />
                             </div>
                           )}
                         </div>
@@ -1874,19 +1930,10 @@ function Goals() {
 }
 function Habits() {
   const { t } = useTranslation();
-  const { snapshot, setModal, action, busy } = useApp();
+  const { snapshot, setModal, busy } = useApp();
   const [archived, setArchived] = useState(false);
   const doc = snapshot.document;
   const habits = doc.habits.filter((h) => !!h.archivedAt === archived);
-  function archive(kind: string, id: string, title: string) {
-    setModal({
-      kind: 'confirm',
-      title: t('archive'),
-      message: t('archiveConfirm', { title }),
-      confirmLabel: t('archive'),
-      onConfirm: () => action(`/api/${kind}/${id}`, 'DELETE'),
-    });
-  }
   return (
     <>
       <Heading title={t('habits')} subtitle={t('habitsSubtitle')}>
@@ -1931,14 +1978,7 @@ function Habits() {
                     >
                       <Pencil size={16} />
                     </button>
-                    <button
-                      className="icon-button"
-                      aria-label={`${t('archive')} ${h.title}`}
-                      disabled={busy}
-                      onClick={() => void archive('habits', h.id, h.title)}
-                    >
-                      <Archive size={16} />
-                    </button>
+                    <RemoveItemButton kind="habits" id={h.id} title={h.title} />
                   </div>
                 )}
               </div>
@@ -2088,22 +2128,12 @@ function Rewards() {
                 ) : (
                   <div className="gift encouragement">{t('keepGoing')}</div>
                 )}
-                <button
+                <RemoveItemButton
+                  kind="gifts"
+                  id={gift.id}
+                  title={gift.title}
                   className="gift-archive icon-button"
-                  aria-label={`${t('archive')} ${gift.title}`}
-                  disabled={busy}
-                  onClick={() =>
-                    setModal({
-                      kind: 'confirm',
-                      title: t('archive'),
-                      message: t('archiveConfirm', { title: gift.title }),
-                      confirmLabel: t('archive'),
-                      onConfirm: () => action(`/api/gifts/${gift.id}`, 'DELETE'),
-                    })
-                  }
-                >
-                  <Archive size={14} />
-                </button>
+                />
               </section>
             );
           })
@@ -2560,10 +2590,10 @@ function ChallengeForm({
   );
   const latestSchedule = modal.kind === 'habit' ? modal.habit?.schedules.at(-1) : undefined;
   const [reminderEnabled, setReminderEnabled] = useState(
-    modal.kind === 'habit' && !!modal.habit?.reminderTime,
+    !!(initial && 'reminderTime' in initial && initial.reminderTime),
   );
   const [reminderTime, setReminderTime] = useState(
-    modal.kind === 'habit' ? (modal.habit?.reminderTime ?? '09:00') : '09:00',
+    initial && 'reminderTime' in initial ? (initial.reminderTime ?? '09:00') : '09:00',
   );
   const initialRecurrence = latestSchedule?.recurrence;
   const initialRepeat = initialRecurrence
@@ -2587,7 +2617,7 @@ function ChallengeForm({
   const [startDate, setStartDate] = useState(
     latestSchedule && latestSchedule.from >= editBoundary ? latestSchedule.from : editBoundary,
   );
-  const [date, setDate] = useState(modal.kind === 'step' ? (modal.step?.date ?? '') : '');
+  const [date, setDate] = useState(initial && 'date' in initial ? (initial.date ?? '') : '');
   const [targetType, setTargetType] = useState<'goal' | 'habitCount' | 'habitStreak'>(
     snapshot.document.goals.some((g) => !g.archivedAt) ? 'goal' : 'habitCount',
   );
@@ -2651,11 +2681,23 @@ function ChallengeForm({
     } else if (modal.kind === 'goal') {
       path = `/api/goals${modal.goal ? `/${modal.goal.id}` : ''}`;
       method = modal.goal ? 'PATCH' : 'POST';
-      body = { title, description, color, icon };
+      body = {
+        title,
+        description,
+        color,
+        icon,
+        date: date || null,
+        reminderTime: reminderEnabled ? reminderTime : null,
+      };
     } else if (modal.kind === 'step') {
       path = modal.step ? `/api/steps/${modal.step.id}` : `/api/goals/${modal.goal.id}/steps`;
       method = modal.step ? 'PATCH' : 'POST';
-      body = { title, date: date || null, icon };
+      body = {
+        title,
+        date: date || null,
+        icon,
+        reminderTime: reminderEnabled ? reminderTime : null,
+      };
     } else {
       path = '/api/gifts';
       body = {
@@ -2744,7 +2786,13 @@ function ChallengeForm({
           onChange={setIcon}
         />
       )}
-      {modal.kind === 'habit' && (
+      {(modal.kind === 'step' || modal.kind === 'goal') && (
+        <label>
+          {t('dateOptional')}
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </label>
+      )}
+      {modal.kind !== 'gift' && (
         <>
           <label className="checkbox-label">
             <input
@@ -2752,7 +2800,7 @@ function ChallengeForm({
               checked={reminderEnabled}
               onChange={(e) => setReminderEnabled(e.target.checked)}
             />
-            {t('habitReminder')}
+            {t(modal.kind === 'habit' ? 'habitReminder' : 'taskReminder')}
           </label>
           {reminderEnabled && (
             <label>
@@ -2765,13 +2813,18 @@ function ChallengeForm({
                 onChange={(e) => setReminderTime(e.target.value)}
               />
               <span className="form-hint">
-                {t('reminderTimeHint', {
+                {t(modal.kind === 'habit' ? 'reminderTimeHint' : 'taskReminderTimeHint', {
                   timezone: latestSchedule?.timezone ?? snapshot.document.preferences.timezone,
                 })}
               </span>
+              {modal.kind !== 'habit' && <span className="form-hint">{t('taskReminderHint')}</span>}
               <span className="form-hint">{t('reminderDeviceHint')}</span>
             </label>
           )}
+        </>
+      )}
+      {modal.kind === 'habit' && (
+        <>
           <label>
             {t('repeatInterval')}
             <select
@@ -2856,12 +2909,6 @@ function ChallengeForm({
             </p>
           )}
         </>
-      )}
-      {modal.kind === 'step' && (
-        <label>
-          {t('dateOptional')}
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        </label>
       )}
       {modal.kind === 'gift' && (
         <>

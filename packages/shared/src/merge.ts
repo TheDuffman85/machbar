@@ -1,4 +1,10 @@
-import { DomainError, type UserDocument, type Completion } from './index.js';
+import {
+  DomainError,
+  canDeleteItem,
+  type RemovableKind,
+  type UserDocument,
+  type Completion,
+} from './index.js';
 
 export function same(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -36,6 +42,7 @@ function entities<T extends { id: string }>(
   local: T[],
   server: T[],
   merge: (b: T | undefined, l: T, s: T) => T = fields,
+  removed?: (item: T) => T | undefined,
 ): T[] {
   const byId = new Map(local.map((item) => [item.id, item]));
   const result = server.map((s) => {
@@ -49,20 +56,25 @@ function entities<T extends { id: string }>(
         )
       : s;
   });
-  return [...result, ...byId.values()];
+  return [...result, ...byId.values()].flatMap((item) => {
+    if (
+      removed &&
+      base.some((b) => b.id === item.id) &&
+      (!local.some((l) => l.id === item.id) || !server.some((s) => s.id === item.id))
+    ) {
+      const retained = removed(item);
+      return retained ? [retained] : [];
+    }
+    return [item];
+  });
 }
 function steps(
   base: UserDocument['goals'][number]['steps'],
   local: typeof base,
   server: typeof base,
+  removed: (item: (typeof base)[number]) => (typeof base)[number] | undefined,
 ) {
-  // Removing a baseline step wins over edits or reordering on the other device.
-  const deleted = new Set(
-    base
-      .filter((b) => !local.some((l) => l.id === b.id) || !server.some((s) => s.id === b.id))
-      .map((b) => b.id),
-  );
-  const merged = entities(base, local, server).filter((s) => !deleted.has(s.id));
+  const merged = entities(base, local, server, fields, removed);
   // Additions must not masquerade as a reorder of the common baseline steps.
   const common = new Set(
     base
@@ -99,65 +111,106 @@ export function mergeDocuments(
   if (base.userId !== local.userId || local.userId !== server.userId)
     throw new DomainError('ACCOUNT_CHANGED', 409);
   const result = structuredClone(server);
+  result.completions = { ...server.completions };
+  for (const [key, l] of Object.entries(local.completions)) {
+    const s = server.completions[key];
+    result.completions[key] = s ? completion(base.completions[key], l, s) : l;
+  }
+  // A concurrent checkoff turns deletion into archiving, retaining all history.
+  const history = {
+    ...result,
+    habits: [...local.habits, ...server.habits],
+    goals: [...local.goals, ...server.goals],
+    gifts: [...local.gifts, ...server.gifts],
+  };
+  const removed =
+    <T extends { id: string; archivedAt: string | null }>(kind: RemovableKind) =>
+    (item: T): T | undefined => {
+      if (canDeleteItem(history, kind, item.id)) return undefined;
+      const ids = new Set([item.id]);
+      if (kind === 'goals')
+        for (const goal of history.goals.filter((g) => g.id === item.id))
+          for (const step of goal.steps) ids.add(step.id);
+      const timestamps = [
+        ...Object.values(history.completions)
+          .filter((c) => ids.has(c.targetId))
+          .map((c) => c.updatedAt),
+        ...history.gifts
+          .filter((g) => g.id === item.id || g.targetId === item.id)
+          .flatMap((g) => (g.claimedAt ? [g.claimedAt] : [])),
+      ].sort();
+      return { ...item, archivedAt: item.archivedAt ?? timestamps.at(-1)! };
+    };
   result.preferences = fields(base.preferences, local.preferences, server.preferences);
   // A timezone conflict also selects its associated schedules; avoid mixed calendar states.
   const zoneConflict =
     local.preferences.timezone !== base.preferences.timezone &&
     server.preferences.timezone !== base.preferences.timezone &&
     local.preferences.timezone !== server.preferences.timezone;
-  result.habits = entities(base.habits, local.habits, server.habits, (b, l, s) => {
-    const merged = fields(b, l, s);
-    // Replacing a pending edit can remove its old effective date. Do not resurrect
-    // that entry from the sync baseline (or from an unchanged offline device).
-    const removed = new Set(
-      zoneConflict
-        ? []
-        : (b?.schedules ?? [])
-            .filter(
-              (original) =>
-                !l.schedules.some((v) => v.from === original.from) ||
-                !s.schedules.some((v) => v.from === original.from),
-            )
-            .map((v) => v.from),
-    );
-    const schedules = new Map(
-      s.schedules.filter((v) => !removed.has(v.from)).map((schedule) => [schedule.from, schedule]),
-    );
-    for (const schedule of l.schedules) {
-      if (removed.has(schedule.from)) continue;
-      const original = b?.schedules.find((v) => v.from === schedule.from);
-      const remote = schedules.get(schedule.from);
-      if (!zoneConflict) {
-        const effectiveBase =
-          original ?? b?.schedules.filter((v) => v.from <= schedule.from).at(-1);
-        if (remote) {
-          const mergedSchedule = fields(effectiveBase, schedule, remote);
-          // Recurrence and weekday selection form one atomic scheduling choice.
-          const rhythm = (value: typeof schedule | undefined) =>
-            value && { weekdays: value.weekdays, recurrence: value.recurrence };
-          const selected = same(rhythm(remote), rhythm(effectiveBase)) ? schedule : remote;
-          mergedSchedule.weekdays = selected.weekdays;
-          if (selected.recurrence) mergedSchedule.recurrence = selected.recurrence;
-          else delete mergedSchedule.recurrence;
-          if (selected.resetStreak) mergedSchedule.resetStreak = true;
-          else delete mergedSchedule.resetStreak;
-          schedules.set(schedule.from, mergedSchedule);
-        } else schedules.set(schedule.from, schedule);
+  result.habits = entities(
+    base.habits,
+    local.habits,
+    server.habits,
+    (b, l, s) => {
+      const merged = fields(b, l, s);
+      // Replacing a pending edit can remove its old effective date. Do not resurrect
+      // that entry from the sync baseline (or from an unchanged offline device).
+      const removed = new Set(
+        zoneConflict
+          ? []
+          : (b?.schedules ?? [])
+              .filter(
+                (original) =>
+                  !l.schedules.some((v) => v.from === original.from) ||
+                  !s.schedules.some((v) => v.from === original.from),
+              )
+              .map((v) => v.from),
+      );
+      const schedules = new Map(
+        s.schedules
+          .filter((v) => !removed.has(v.from))
+          .map((schedule) => [schedule.from, schedule]),
+      );
+      for (const schedule of l.schedules) {
+        if (removed.has(schedule.from)) continue;
+        const original = b?.schedules.find((v) => v.from === schedule.from);
+        const remote = schedules.get(schedule.from);
+        if (!zoneConflict) {
+          const effectiveBase =
+            original ?? b?.schedules.filter((v) => v.from <= schedule.from).at(-1);
+          if (remote) {
+            const mergedSchedule = fields(effectiveBase, schedule, remote);
+            // Recurrence and weekday selection form one atomic scheduling choice.
+            const rhythm = (value: typeof schedule | undefined) =>
+              value && { weekdays: value.weekdays, recurrence: value.recurrence };
+            const selected = same(rhythm(remote), rhythm(effectiveBase)) ? schedule : remote;
+            mergedSchedule.weekdays = selected.weekdays;
+            if (selected.recurrence) mergedSchedule.recurrence = selected.recurrence;
+            else delete mergedSchedule.recurrence;
+            if (selected.resetStreak) mergedSchedule.resetStreak = true;
+            else delete mergedSchedule.resetStreak;
+            schedules.set(schedule.from, mergedSchedule);
+          } else schedules.set(schedule.from, schedule);
+        }
       }
-    }
-    merged.schedules = [...schedules.values()].sort((a, b) => a.from.localeCompare(b.from));
-    return merged;
-  });
-  result.goals = entities(base.goals, local.goals, server.goals, (b, l, s) => ({
-    ...fields(b, l, s),
-    steps: steps(b?.steps ?? [], l.steps, s.steps),
-  }));
-  result.gifts = entities(base.gifts, local.gifts, server.gifts);
-  result.completions = { ...server.completions };
-  for (const [key, l] of Object.entries(local.completions)) {
-    const s = server.completions[key];
-    result.completions[key] = s ? completion(base.completions[key], l, s) : l;
-  }
+      merged.schedules = [...schedules.values()].sort((a, b) => a.from.localeCompare(b.from));
+      return merged;
+    },
+    removed('habits'),
+  );
+  result.goals = entities(
+    base.goals,
+    local.goals,
+    server.goals,
+    (b, l, s) => ({
+      ...fields(b, l, s),
+      steps: steps(b?.steps ?? [], l.steps, s.steps, removed('steps')),
+    }),
+    removed('goals'),
+  );
+  result.gifts = entities(base.gifts, local.gifts, server.gifts, fields, removed('gifts'));
+  const targetIds = new Set([...result.habits, ...result.goals].map((item) => item.id));
+  result.gifts = result.gifts.filter((gift) => targetIds.has(gift.targetId));
   const stepIds = new Set(result.goals.flatMap((g) => g.steps.map((s) => s.id)));
   for (const [key, value] of Object.entries(result.completions)) {
     if (value.targetType === 'step' && !stepIds.has(value.targetId)) delete result.completions[key];

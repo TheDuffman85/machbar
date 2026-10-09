@@ -1,7 +1,7 @@
 {
   "notifications": "Notifications",
-  "notificationsHelp": "Enable reminders on this device, then choose a reminder time for each habit.",
-  "notificationsOfflineHint": "Background reminders need internet. Habit edits and checkoffs work offline, but unsynced changes cannot cancel a reminder already queued. Delayed reminders expire at the end of the habit’s local day.",
+  "notificationsHelp": "Enable reminders on this device, then choose reminder times for habits, goals, and steps.",
+  "notificationsOfflineHint": "Background reminders need internet. Task edits and checkoffs work offline, but unsynced changes cannot cancel a reminder already queued. Delayed reminders expire at the end of the task’s local day.",
   "notificationsEnabled": "Enabled on this device",
   "notificationsDisabled": "Disabled on this device",
   "notificationPermission_default": "Permission not requested",
@@ -418,7 +418,7 @@
   "CAMERA_UNAVAILABLE": "Could not open the camera. Allow camera access or upload a QR image.",
   "installHint": "Install Machbar for quick access from your home screen.",
   "installShort": "Install",
-  "notificationsHint": "Turn on notifications to get your habit reminders.",
+  "notificationsHint": "Turn on notifications to get your reminders.",
   "enableShort": "Enable",
   "install": "Install Machbar",
   "installHelp": "On iPhone or iPad, use Share → Add to Home Screen. On other browsers, look for the install option in the browser menu.",
@@ -478,5 +478,11 @@
   "loading": "Getting your small wins ready…",
   "retry": "Try again",
   "total": "Total",
-  "sourceCode": "Open-source credits"
+  "sourceCode": "Open-source credits",
+  "delete": "Delete",
+  "deleteConfirm": "Delete “{{title}}”? This item has no log history. Any unclaimed gifts linked to it will also be deleted.",
+  "taskReminder": "Remind me about this task",
+  "taskReminderHint": "Daily until completed. With a date, reminders start on that date.",
+  "scheduledGoal": "Scheduled",
+  "taskReminderTimeHint": "Time follows {{timezone}} and any future timezone changes."
 }

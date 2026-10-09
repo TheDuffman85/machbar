@@ -117,6 +117,8 @@ export function readRecord(db: DatabaseSync, kind: RecordKind, key: string): str
     })),
     goals: rows('goals').map((g) => ({
       title: g.title,
+      ...(g.date_present ? { date: g.date } : {}),
+      ...(g.reminder_present ? { reminderTime: g.reminder_time } : {}),
       description: g.description,
       color: g.color,
       ...optional('icon', g.icon),
@@ -124,6 +126,7 @@ export function readRecord(db: DatabaseSync, kind: RecordKind, key: string): str
       steps: (stepMap.get(String(g.id)) ?? []).map((s) => ({
         title: s.title,
         date: s.date,
+        ...(s.reminder_present ? { reminderTime: s.reminder_time } : {}),
         ...optional('icon', s.icon),
         id: s.id,
         archivedAt: s.archived_at,
@@ -294,6 +297,10 @@ function writeProfile(
       title: g.title,
       description: g.description,
       color: g.color,
+      date: g.date ?? null,
+      date_present: Number(g.date !== undefined),
+      reminder_time: g.reminderTime ?? null,
+      reminder_present: Number(g.reminderTime !== undefined),
       icon: g.icon ?? null,
       archived_at: g.archivedAt,
     });
@@ -305,6 +312,8 @@ function writeProfile(
         position,
         title: s.title,
         date: s.date,
+        reminder_time: s.reminderTime ?? null,
+        reminder_present: Number(s.reminderTime !== undefined),
         icon: s.icon ?? null,
         archived_at: s.archivedAt,
       }),

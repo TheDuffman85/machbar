@@ -70,6 +70,10 @@ CREATE TABLE goals (
   description TEXT NOT NULL,
   color TEXT NOT NULL,
   icon TEXT,
+  date TEXT,
+  date_present INTEGER NOT NULL CHECK (date_present IN (0, 1)),
+  reminder_time TEXT,
+  reminder_present INTEGER NOT NULL CHECK (reminder_present IN (0, 1)),
   archived_at TEXT,
   PRIMARY KEY (user_id, id), UNIQUE (user_id, position)
 ) STRICT;
@@ -80,6 +84,8 @@ CREATE TABLE steps (
   position INTEGER NOT NULL CHECK (position >= 0),
   title TEXT NOT NULL,
   date TEXT,
+  reminder_time TEXT,
+  reminder_present INTEGER NOT NULL CHECK (reminder_present IN (0, 1)),
   icon TEXT,
   archived_at TEXT,
   PRIMARY KEY (user_id, id), UNIQUE (user_id, goal_id, position),

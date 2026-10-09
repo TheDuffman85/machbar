@@ -25,7 +25,7 @@ Machbar is a self-hosted, mobile-first app for building habits, breaking goals i
 - **Rewards for yourself:** unlock gifts by completing a goal, reaching a habit completion count, or building a streak.
 - **Offline use and device sync:** edit, check off, and save locally; changes sync automatically when you reconnect, with a sync log and in-app update prompts.
 - **No passwords for your profile:** open the same profile on another device by entering its private ID or scanning its QR code.
-- **Optional habit reminders:** Web Push notifications with a reminder time for each habit, plus one-time hints to install the app and turn on notifications.
+- **Optional reminders:** Web Push notifications with a reminder time for each habit, goal, and step, plus one-time hints to install the app and turn on notifications.
 - **Make it yours:** custom avatars, challenge icons and colors, light/dark themes, English/German, and timezone-aware schedules.
 - **Self-hosted storage:** profiles and progress live in SQLite on your server, with Docker and Compose support.
 - **Optional admin page:** a hidden, password-protected page to review profiles, delete them, and temporarily open sign-ups.

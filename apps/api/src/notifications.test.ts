@@ -4,7 +4,7 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import webpush from 'web-push';
-import { createUser, mutateDocument, operationKey } from '@machbar/shared';
+import { applyCompletion, createUser, mutateDocument, operationKey } from '@machbar/shared';
 import { readConfig } from './config.js';
 import { buildServer } from './server.js';
 import { SqliteStore } from './store.js';
@@ -308,6 +308,57 @@ describe('notification API', () => {
   });
 });
 describe('notification scheduler', () => {
+  it('delivers and deduplicates habit, goal and step reminders, then stops when the goal is completed', async () => {
+    await register();
+    await profiles.update(userId, (doc) => {
+      mutateDocument(
+        doc,
+        '/api/goals',
+        'POST',
+        {
+          title: 'Home',
+          date: '2026-10-07',
+          reminderTime: '09:00',
+        },
+        randomUUID(),
+        now,
+      );
+      mutateDocument(
+        doc,
+        `/api/goals/${doc.goals[0]!.id}/steps`,
+        'POST',
+        {
+          title: 'Shelf',
+          reminderTime: '09:00',
+        },
+        randomUUID(),
+        now,
+      );
+    });
+    await scheduler().tick();
+    expect(send.mock.calls.map((call) => call[1].body)).toEqual(['Read', 'Home', 'Shelf']);
+    expect(new Set(send.mock.calls.map((call) => call[1].tag)).size).toBe(3);
+    await scheduler().tick();
+    expect(send).toHaveBeenCalledTimes(3);
+    now = new Date('2026-10-08T07:00:00Z');
+    await profiles.update(userId, (doc) => {
+      applyCompletion(
+        doc,
+        {
+          operationId: randomUUID(),
+          targetType: 'step',
+          targetId: doc.goals[0]!.steps[0]!.id,
+          date: '2026-10-08',
+          timezone: doc.preferences.timezone,
+          completed: true,
+          expectedVersion: 0,
+        },
+        now,
+      );
+    });
+    await scheduler().tick();
+    expect(send.mock.calls.map((call) => call[1].body)).toEqual(['Read', 'Home', 'Shelf', 'Read']);
+  });
   it('rotates after a slow send and retains progress for a 500-reminder backlog', async () => {
     await profiles.update(userId, (doc) => {
       doc.habits = Array.from({ length: 500 }, () => ({ ...doc.habits[0]!, id: randomUUID() }));

@@ -1,3 +1,4 @@
+import { canDeleteItem, deleteItem, type RemovableKind } from './removal.js';
 import { z } from 'zod';
 import {
   alignAnchor,
@@ -60,7 +61,8 @@ export function mutateDocument(
         : doc[kind as 'habits' | 'goals' | 'gifts'];
     const item = items.find((i) => i.id === id);
     if (!item) throw new DomainError('NOT_FOUND', 404);
-    item.archivedAt ??= now.toISOString();
+    if (canDeleteItem(doc, kind as RemovableKind, id)) deleteItem(doc, kind as RemovableKind, id);
+    else item.archivedAt ??= now.toISOString();
   } else if (kind === 'habits' && method === 'POST' && !id) {
     const { weekdays, recurrence, startDate, ...input } = habitInputSchema.parse(body);
     const today = localDate(doc.preferences.timezone, now);

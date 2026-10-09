@@ -4,7 +4,13 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import webpush from 'web-push';
-import { completionKey, createUser, mutateDocument, type UserDocument } from '@machbar/shared';
+import {
+  completionKey,
+  createUser,
+  mutateDocument,
+  pruneUnusedArchivedItems,
+  type UserDocument,
+} from '@machbar/shared';
 import { databaseFilename, migrationBackupDirectory, SqliteDatabase } from './database.js';
 import { SqliteStore } from './store.js';
 import { PushStore, ReminderScheduler } from './notifications.js';
@@ -554,16 +560,18 @@ describe('normalized SQLite schema', () => {
     };
     const pushRaw = JSON.stringify(push, null, 2);
     versionOne([{ key: doc.userId, contents: raw }], pushRaw);
+    pruneUnusedArchivedItems(doc);
+    doc.revision++;
     const first = stores({ maxProfiles: 1, maxStorageBytes: 1 });
     expect(await first.profiles.readExisting(doc.userId)).toEqual(doc);
     expect(await first.push.access((state) => state)).toEqual(push);
-    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(3);
+    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(4);
     expect(
       inspect((db) => db.prepare("SELECT name FROM sqlite_master WHERE name = 'records'").get()),
     ).toBeUndefined();
     expect(
       inspect((db) => db.prepare('SELECT logical_bytes FROM profiles').get()!.logical_bytes),
-    ).toBe(Buffer.byteLength(raw));
+    ).toBe(Buffer.byteLength(JSON.stringify(doc)));
     expect(
       inspect((db) => db.prepare('SELECT logical_bytes FROM push_state').get()!.logical_bytes),
     ).toBe(Buffer.byteLength(pushRaw));
@@ -576,7 +584,7 @@ describe('normalized SQLite schema', () => {
         saved.habits.reverse();
         saved.goals[0]!.steps.reverse();
       },
-      73,
+      doc.revision,
     );
     doc.habits.reverse();
     doc.goals[0]!.steps.reverse();
@@ -593,11 +601,16 @@ describe('normalized SQLite schema', () => {
     inspect((db) =>
       db.exec(`ALTER TABLE profiles DROP COLUMN created_at;
         ALTER TABLE profiles DROP COLUMN updated_at; DROP TABLE deleted_profiles;
+        ALTER TABLE goals DROP COLUMN date; ALTER TABLE goals DROP COLUMN date_present;
+        ALTER TABLE goals DROP COLUMN reminder_time; ALTER TABLE goals DROP COLUMN reminder_present;
+        ALTER TABLE steps DROP COLUMN reminder_time; ALTER TABLE steps DROP COLUMN reminder_present;
         PRAGMA user_version = 2;`),
     );
     const second = stores();
+    pruneUnusedArchivedItems(doc);
+    doc.revision++;
     expect(await second.profiles.readExisting(doc.userId)).toEqual(doc);
-    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(3);
+    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(4);
     expect(inspect((db) => db.prepare('SELECT * FROM deleted_profiles').all())).toEqual([]);
     expect(
       inspect((db) => ({ ...db.prepare('SELECT created_at, updated_at FROM profiles').get() })),
@@ -619,9 +632,88 @@ describe('normalized SQLite schema', () => {
     },
   );
 
+  it.each([undefined, null, '2026-10-09'])(
+    'round-trips optional goal dates and task reminders: %s',
+    async (date) => {
+      const doc = createUser(randomUUID());
+      mutateDocument(
+        doc,
+        '/api/goals',
+        'POST',
+        {
+          title: 'Home',
+          ...(date === undefined ? {} : { date }),
+          reminderTime: '09:30',
+        },
+        randomUUID(),
+      );
+      const goal = doc.goals[0]!;
+      for (const reminderTime of [undefined, null, '10:15'])
+        mutateDocument(
+          doc,
+          `/api/goals/${goal.id}/steps`,
+          'POST',
+          {
+            title: 'Shelf',
+            ...(reminderTime === undefined ? {} : { reminderTime }),
+          },
+          randomUUID(),
+        );
+      const first = stores();
+      await first.budget.commit('profile', doc.userId, JSON.stringify(doc));
+      await first.budget.close();
+      expect(await stores().profiles.readExisting(doc.userId)).toEqual(doc);
+    },
+  );
+
+  it('upgrades version 3 atomically, cleaning unused archives and retaining history, timestamps and quotas', async () => {
+    const doc = richProfile();
+    const unusedHabit = { ...doc.habits[1]!, id: randomUUID(), archivedAt: '2026-10-08T12:00:00Z' };
+    doc.habits.push(unusedHabit);
+    doc.goals.push({ ...doc.goals[1]!, id: randomUUID(), archivedAt: '2026-10-08T12:00:00Z' });
+    mutateDocument(
+      doc,
+      '/api/gifts',
+      'POST',
+      {
+        title: 'Unused gift',
+        targetType: 'habitCount',
+        targetId: doc.habits[1]!.id,
+      },
+      randomUUID(),
+    );
+    doc.gifts.at(-1)!.targetId = unusedHabit.id;
+    const first = stores();
+    await first.budget.commit('profile', doc.userId, JSON.stringify(doc));
+    await first.budget.close();
+    const times = inspect((db) => db.prepare('SELECT created_at, updated_at FROM profiles').get());
+    inspect((db) =>
+      db.exec(`ALTER TABLE goals DROP COLUMN date;
+      ALTER TABLE goals DROP COLUMN date_present; ALTER TABLE goals DROP COLUMN reminder_time;
+      ALTER TABLE goals DROP COLUMN reminder_present; ALTER TABLE steps DROP COLUMN reminder_time;
+      ALTER TABLE steps DROP COLUMN reminder_present; PRAGMA user_version = 3;`),
+    );
+    pruneUnusedArchivedItems(doc);
+    doc.revision++;
+    const second = stores({ maxStorageBytes: 1 });
+    expect(await second.profiles.readExisting(doc.userId)).toEqual(doc);
+    expect(
+      inspect((db) => db.prepare('SELECT created_at, updated_at FROM profiles').get()),
+    ).toEqual(times);
+    expect(
+      inspect((db) => db.prepare('SELECT logical_bytes FROM profiles').get()!.logical_bytes),
+    ).toBe(Buffer.byteLength(JSON.stringify(doc)));
+    expect(inspect((db) => db.prepare('PRAGMA foreign_key_check').all())).toEqual([]);
+    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(4);
+    await second.budget.close();
+    expect(await stores().profiles.readExisting(doc.userId)).toEqual(doc);
+  });
+
   it('imports full JSON history directly into relational tables', async () => {
     const doc = richProfile();
     await writeFile(join(directory, `${doc.userId}.json`), JSON.stringify(doc));
+    pruneUnusedArchivedItems(doc);
+    doc.revision++;
     expect(await stores().profiles.readExisting(doc.userId)).toEqual(doc);
     expect(
       inspect((db) => db.prepare('SELECT COUNT(*) AS count FROM habit_schedules').get()!.count),
@@ -654,6 +746,8 @@ describe('normalized SQLite schema', () => {
         .run(JSON.stringify(other), other.userId),
     );
     const retry = stores();
+    pruneUnusedArchivedItems(doc);
+    doc.revision++;
     expect(await retry.profiles.readExisting(doc.userId)).toEqual(doc);
     expect(await retry.profiles.readExisting(other.userId)).toEqual(other);
   });

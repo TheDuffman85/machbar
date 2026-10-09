@@ -45,11 +45,11 @@ let db: Promise<IDBPDatabase<CacheDB>> | undefined;
 function database(): Promise<IDBPDatabase<CacheDB>> {
   if (db) return db;
   let expired = false;
-  const opening = openDB<CacheDB>('machbar', 3, {
+  const opening = openDB<CacheDB>('machbar', 4, {
     upgrade(database, oldVersion, _newVersion, transaction) {
       if (oldVersion < 3) database.createObjectStore('syncLog');
       if (oldVersion === 0) database.createObjectStore('accounts');
-      else if (oldVersion < 2) {
+      else if (oldVersion < 4) {
         void (async () => {
           let cursor = await transaction.objectStore('accounts').openCursor();
           while (cursor) {

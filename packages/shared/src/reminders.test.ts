@@ -132,3 +132,90 @@ describe('habit reminders', () => {
     expect(local.habits[0]!.schedules).toEqual(base.habits[0]!.schedules);
   });
 });
+
+describe('goal and step reminders', () => {
+  function tasks() {
+    const doc = createUser(randomUUID());
+    mutateDocument(
+      doc,
+      '/api/goals',
+      'POST',
+      { title: 'Home', date: '2026-10-07', reminderTime: '09:00' },
+      randomUUID(),
+    );
+    mutateDocument(
+      doc,
+      `/api/goals/${doc.goals[0]!.id}/steps`,
+      'POST',
+      { title: 'Shelf', reminderTime: '10:00' },
+      randomUUID(),
+    );
+    mutateDocument(
+      doc,
+      `/api/goals/${doc.goals[0]!.id}/steps`,
+      'POST',
+      { title: 'Plant', date: '2026-10-08', reminderTime: '11:00' },
+      randomUUID(),
+    );
+    return doc;
+  }
+  it('supports independent dates and times, catches up after due dates, and uses the profile timezone', () => {
+    const doc = tasks();
+    expect(dueReminders(doc, new Date('2026-10-06T07:00:00Z'))).toEqual([]);
+    expect(dueReminders(doc, new Date('2026-10-06T08:00:00Z')).map((r) => r.title)).toEqual([
+      'Shelf',
+    ]);
+    expect(dueReminders(doc, new Date('2026-10-07T07:00:00Z'))).toMatchObject([
+      { targetType: 'goal', targetId: doc.goals[0]!.id, title: 'Home', date: '2026-10-07' },
+    ]);
+    expect(dueReminders(doc, new Date('2026-10-08T09:00:00Z')).map((r) => r.title)).toEqual([
+      'Home',
+      'Shelf',
+      'Plant',
+    ]);
+    doc.preferences.timezone = 'America/New_York';
+    expect(dueReminders(doc, new Date('2026-10-08T09:00:00Z'))).toEqual([]);
+    expect(dueReminders(doc, new Date('2026-10-08T15:00:00Z'))).toHaveLength(3);
+  });
+  it('suppresses completed steps, completed goals, archived steps and archived parents', () => {
+    const doc = tasks(),
+      goal = doc.goals[0]!;
+    const now = new Date('2026-10-08T12:00:00Z');
+    for (const step of goal.steps) {
+      const key = `step:${step.id}`;
+      doc.completions[key] = {
+        key,
+        targetType: 'step',
+        targetId: step.id,
+        completed: true,
+        date: '2026-10-08',
+        timezone: doc.preferences.timezone,
+        updatedAt: now.toISOString(),
+        version: 1,
+      };
+    }
+    expect(dueReminders(doc, now)).toEqual([]);
+    doc.completions = {};
+    goal.steps[0]!.archivedAt = now.toISOString();
+    expect(dueReminders(doc, now).map((r) => r.title)).toEqual(['Home', 'Plant']);
+    goal.archivedAt = now.toISOString();
+    expect(dueReminders(doc, now)).toEqual([]);
+  });
+  it('keeps legacy defaults disabled and merges dates and reminders independently', () => {
+    const base = tasks();
+    delete base.goals[0]!.date;
+    delete base.goals[0]!.reminderTime;
+    for (const step of base.goals[0]!.steps) delete step.reminderTime;
+    expect(userDocumentSchema.parse(base).goals[0]!.date).toBeUndefined();
+    expect(dueReminders(base, new Date('2026-10-08T12:00:00Z'))).toEqual([]);
+    const local = structuredClone(base),
+      server = structuredClone(base);
+    local.goals[0]!.date = '2026-10-09';
+    local.goals[0]!.steps[0]!.reminderTime = '12:00';
+    server.goals[0]!.reminderTime = '10:00';
+    server.goals[0]!.steps[0]!.date = '2026-10-08';
+    const merged = mergeDocuments(base, local, server);
+    expect(merged.goals[0]).toMatchObject({ date: '2026-10-09', reminderTime: '10:00' });
+    expect(merged.goals[0]!.steps[0]).toMatchObject({ date: '2026-10-08', reminderTime: '12:00' });
+  });
+});

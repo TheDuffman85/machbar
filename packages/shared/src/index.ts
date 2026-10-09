@@ -59,14 +59,15 @@ export const iconChoices = [
 ] as const;
 export const iconSchema = z.enum(iconChoices);
 export type EntityIcon = z.infer<typeof iconSchema>;
+const reminderTimeSchema = z
+  .string()
+  .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)
+  .nullable()
+  .optional();
 export const habitInputSchema = z
   .object({
     title,
-    reminderTime: z
-      .string()
-      .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)
-      .nullable()
-      .optional(),
+    reminderTime: reminderTimeSchema,
     description: z.string().max(500).default(''),
     weekdays: weekdaysSchema,
     recurrence: recurrenceSchema.nullable().optional(),
@@ -78,13 +79,20 @@ export const habitInputSchema = z
 export const goalInputSchema = z
   .object({
     title,
+    date: dateSchema.nullable().optional(),
+    reminderTime: reminderTimeSchema,
     description: z.string().max(500).default(''),
     color: z.enum(['sage', 'peach', 'lavender', 'blue']).default('lavender'),
     icon: iconSchema.optional(),
   })
   .strict();
 export const stepInputSchema = z
-  .object({ title, date: dateSchema.nullable().default(null), icon: iconSchema.optional() })
+  .object({
+    title,
+    date: dateSchema.nullable().default(null),
+    reminderTime: reminderTimeSchema,
+    icon: iconSchema.optional(),
+  })
   .strict();
 const scheduleSchema = z.object({
   from: dateSchema,
@@ -540,3 +548,5 @@ export function bootstrapFor(snapshot: SyncSnapshot, now = new Date()): Bootstra
     progress: progressFor(snapshot.document, now),
   };
 }
+
+export { canDeleteItem, pruneUnusedArchivedItems, type RemovableKind } from './removal.js';

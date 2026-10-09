@@ -2,7 +2,8 @@ import { localDate, occurrenceFor, completionKey, type UserDocument } from './in
 import { calendarFormatter } from './calendar.js';
 
 export type DueReminder = {
-  habitId: string;
+  targetType: 'habit' | 'goal' | 'step';
+  targetId: string;
   date: string;
   title: string;
   language: UserDocument['preferences']['language'];
@@ -42,12 +43,50 @@ export function dueReminders(doc: UserDocument, now: Date): DueReminder[] {
     // Comparing wall times catches up after downtime and missing DST hours.
     if (time < habit.reminderTime) continue;
     due.push({
-      habitId: habit.id,
+      targetType: 'habit',
+      targetId: habit.id,
       date,
       title: habit.title,
       language: doc.preferences.language,
       expiresAt: nextLocalMidnight(schedule.timezone, now),
     });
+  }
+  const timezone = doc.preferences.timezone;
+  const date = localDate(timezone, now);
+  const parts = calendarFormatter(timezone, true).formatToParts(now);
+  const time = `${parts.find((p) => p.type === 'hour')!.value}:${parts.find((p) => p.type === 'minute')!.value}`;
+  for (const goal of doc.goals) {
+    if (goal.archivedAt) continue;
+    const activeSteps = goal.steps.filter((step) => !step.archivedAt);
+    const completed = activeSteps.length
+      ? activeSteps.every((step) => doc.completions[completionKey('step', step.id, '')]?.completed)
+      : !!doc.completions[completionKey('goal', goal.id, '')]?.completed;
+    const tasks = [
+      { ...goal, targetType: 'goal' as const, completed },
+      ...goal.steps.map((step) => ({
+        ...step,
+        targetType: 'step' as const,
+        completed: !!doc.completions[completionKey('step', step.id, '')]?.completed,
+      })),
+    ];
+    for (const task of tasks) {
+      if (
+        task.archivedAt ||
+        task.completed ||
+        !task.reminderTime ||
+        (task.date && task.date > date) ||
+        time < task.reminderTime
+      )
+        continue;
+      due.push({
+        targetType: task.targetType,
+        targetId: task.id,
+        date,
+        title: task.title,
+        language: doc.preferences.language,
+        expiresAt: nextLocalMidnight(timezone, now),
+      });
+    }
   }
   return due;
 }

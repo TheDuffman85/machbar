@@ -128,7 +128,7 @@ export class ReminderScheduler {
           inspected++;
           bindingInspected++;
           const reminder = due[item]!;
-          const key = `${binding.id}:${reminder.habitId}:${reminder.date}`;
+          const key = `${binding.id}:${reminder.targetId}:${reminder.date}`;
           const claimed = await this.push.access((state) => {
             if (!state.bindings.some((b) => b.id === binding.id)) return false;
             const previous = state.dispatches[key];
@@ -333,7 +333,7 @@ export function registerNotifications(
   });
   if (config.vapid && sender && options.schedule !== false) {
     const scheduler = new ReminderScheduler(push, profiles, sender, clock, () =>
-      app.log.warn('Habit notification dispatch failed.'),
+      app.log.warn('Notification dispatch failed.'),
     );
     let timer: ReturnType<typeof setInterval>;
     app.addHook('onReady', async () => {

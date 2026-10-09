@@ -3,7 +3,7 @@ import { chmod, link, lstat, mkdir, open, readFile, readdir, unlink } from 'node
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { localUserIdSchema, userDocumentSchema } from '@machbar/shared';
+import { localUserIdSchema, userDocumentSchema, pruneUnusedArchivedItems } from '@machbar/shared';
 import { stateSchema } from './push-state.js';
 import { normalizedSchema } from './database-schema.js';
 import { readRecord, writeRecord, type RecordKind } from './database-records.js';
@@ -11,7 +11,7 @@ export type { RecordKind } from './database-records.js';
 
 export const databaseFilename = 'data.db';
 export const migrationBackupDirectory = 'migration-backup';
-const schemaVersion = 3;
+const schemaVersion = 4;
 
 // Relational rows own persistence. JSON is only the API encoding and legacy
 // import format; archived files remain immutable recovery snapshots.
@@ -71,7 +71,13 @@ export class SqliteDatabase {
             const archive = db.prepare('INSERT INTO migration_files (name, sha256) VALUES (?, ?)');
             for (const record of legacy) {
               try {
-                writeRecord(db, record.kind, record.key, record.contents, null);
+                writeRecord(
+                  db,
+                  record.kind,
+                  record.key,
+                  migrationContents(record.kind, record.contents),
+                  null,
+                );
               } catch (cause) {
                 throw new Error(
                   `Cannot migrate ${record.name}; original file preserved. Repair it and restart.`,
@@ -99,7 +105,13 @@ export class SqliteDatabase {
               try {
                 if (record.kind !== 'profile' && record.kind !== 'push')
                   throw new Error('Unknown record kind');
-                writeRecord(db, record.kind, String(record.key), String(record.contents), null);
+                writeRecord(
+                  db,
+                  record.kind,
+                  String(record.key),
+                  migrationContents(record.kind, String(record.contents)),
+                  null,
+                );
               } catch (cause) {
                 throw new Error(
                   `Cannot normalize SQLite ${record.kind} record ${record.key}; original database preserved.`,
@@ -122,7 +134,38 @@ export class SqliteDatabase {
             db.exec(`ALTER TABLE profiles ADD COLUMN created_at TEXT;
               ALTER TABLE profiles ADD COLUMN updated_at TEXT;
               CREATE TABLE deleted_profiles (user_id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL) STRICT;
-              PRAGMA user_version = ${schemaVersion};`);
+              PRAGMA user_version = 3;`);
+          db.exec('COMMIT');
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
+      }
+      if (version() === 3) {
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          if (version() === 3) {
+            db.exec(`ALTER TABLE goals ADD COLUMN date TEXT;
+              ALTER TABLE goals ADD COLUMN date_present INTEGER NOT NULL DEFAULT 0 CHECK (date_present IN (0, 1));
+              ALTER TABLE goals ADD COLUMN reminder_time TEXT;
+              ALTER TABLE goals ADD COLUMN reminder_present INTEGER NOT NULL DEFAULT 0 CHECK (reminder_present IN (0, 1));
+              ALTER TABLE steps ADD COLUMN reminder_time TEXT;
+              ALTER TABLE steps ADD COLUMN reminder_present INTEGER NOT NULL DEFAULT 0 CHECK (reminder_present IN (0, 1));`);
+            for (const row of db.prepare('SELECT user_id, updated_at FROM profiles').all()) {
+              const key = String(row.user_id);
+              const contents = readRecord(db, 'profile', key)!;
+              const migrated = migrationContents('profile', contents);
+              if (migrated !== contents)
+                writeRecord(
+                  db,
+                  'profile',
+                  key,
+                  migrated,
+                  row.updated_at === null ? null : String(row.updated_at),
+                );
+            }
+            db.exec(`PRAGMA user_version = ${schemaVersion}`);
+          }
           db.exec('COMMIT');
         } catch (error) {
           db.exec('ROLLBACK');
@@ -289,4 +332,12 @@ export class SqliteDatabase {
     this.connection = undefined;
     this.closed = true;
   }
+}
+
+function migrationContents(kind: RecordKind, contents: string): string {
+  if (kind !== 'profile') return contents;
+  const doc = userDocumentSchema.parse(JSON.parse(contents));
+  if (!pruneUnusedArchivedItems(doc)) return contents;
+  doc.revision++;
+  return JSON.stringify(doc);
 }

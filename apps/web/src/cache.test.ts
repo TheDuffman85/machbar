@@ -49,3 +49,19 @@ describe('offline cache migration', () => {
     expect(entry.snapshot.progress.xp).toBe(0);
   });
 });
+
+it('cleans unused archives from cached documents without losing the baseline or pending checkoffs', () => {
+  const legacy = fixture();
+  const entry = migrateEntry(legacy);
+  const logged = entry.snapshot.document.habits[0]!;
+  logged.archivedAt = now.toISOString();
+  const unused = { ...logged, id: randomUUID(), title: 'Unused archive' };
+  entry.snapshot.document.habits.push(unused);
+  entry.base.habits.push(structuredClone(unused));
+  const migrated = migrateEntry(entry);
+  expect(migrated.snapshot.document.habits.map((h) => h.id)).toEqual([logged.id]);
+  expect(migrated.snapshot.progress.xp).toBe(10);
+  expect(migrated.base).toEqual(entry.base);
+  expect(migrated.queue).toEqual(entry.queue);
+  expect(migrateEntry(migrated)).toBe(migrated);
+});

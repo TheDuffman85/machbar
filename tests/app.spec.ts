@@ -709,6 +709,7 @@ test('the day page hides archived habits, goals and steps on today and past days
 test('sync errors preserve locally archived data and stay in the background', async ({ page }) => {
   await onboard(page);
   await addHabit(page);
+  await page.getByRole('button', { name: 'Complete Take a little walk', exact: true }).click();
   await readSnapshot(page);
   await page.goto('/habits');
   await page.route('**/api/sync', (route) =>

@@ -1,6 +1,7 @@
 import {
   applyCompletion,
   bootstrapFor,
+  pruneUnusedArchivedItems,
   type Bootstrap,
   type CompletionOperation,
   type UserDocument,
@@ -39,7 +40,11 @@ export type LegacyEntry = { snapshot: Bootstrap; queue: CompletionOperation[]; c
 
 /** Upgrade without silently throwing away a legacy operation that cannot be replayed. */
 export function migrateEntry(value: Entry | LegacyEntry): Entry {
-  if ('base' in value) return value;
+  if ('base' in value) {
+    const document = structuredClone(value.snapshot.document);
+    if (!pruneUnusedArchivedItems(document)) return value;
+    return { ...value, snapshot: bootstrapFor({ ...value.snapshot, document }) };
+  }
   const document = structuredClone(value.snapshot.document);
   const recovery: CompletionOperation[] = [];
   for (const operation of value.queue) {
@@ -49,6 +54,7 @@ export function migrateEntry(value: Entry | LegacyEntry): Entry {
       recovery.push(operation);
     }
   }
+  pruneUnusedArchivedItems(document);
   return {
     base: value.snapshot.document,
     snapshot: bootstrapFor({ ...value.snapshot, document }),
