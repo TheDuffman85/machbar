@@ -165,6 +165,7 @@ export function mutateDocument(
   } else if (kind === 'gifts' && method === 'PATCH' && !action) {
     const gift = doc.gifts.find((g) => g.id === id && !g.archivedAt);
     if (!gift) throw new DomainError('NOT_FOUND', 404);
+    if (gift.claimedAt) throw new DomainError('GIFT_CLAIMED', 409);
     const changes = onlySupplied(giftInputSchema.partial().parse(body), body);
     const input = giftInputSchema.parse({
       title: gift.title,

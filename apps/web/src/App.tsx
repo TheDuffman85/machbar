@@ -9,7 +9,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from 'react';
-import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
+import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -851,7 +851,8 @@ export function App() {
     { path: '/', key: 'today', icon: Sun },
     { path: '/habits', key: 'habits', icon: Leaf },
     { path: '/goals', key: 'goals', icon: Target },
-    { path: '/rewards', key: 'rewards', icon: GiftIcon },
+    { path: '/gifts', key: 'gifts', icon: GiftIcon },
+    { path: '/achievements', key: 'achievements', icon: Trophy },
   ];
   return (
     <Context.Provider value={context}>
@@ -935,7 +936,9 @@ export function App() {
               />
               <Route path="/goals" element={<Goals />} />
               <Route path="/habits" element={<Habits />} />
-              <Route path="/rewards" element={<Rewards />} />
+              <Route path="/gifts" element={<Gifts />} />
+              <Route path="/achievements" element={<Achievements />} />
+              <Route path="/rewards" element={<Navigate to="/gifts" replace />} />
               <Route path="/settings" element={<Settings />} />
               <Route
                 path="/settings/sync-log"
@@ -1418,7 +1421,7 @@ function Today() {
                 </h2>
               </div>
               {reachedBadges.map(({ badge: [id, name, description, count, Icon], color }) => (
-                <NavLink className="completed-goal" to="/rewards" key={id}>
+                <NavLink className="completed-goal" to="/achievements" key={id}>
                   <span className={`task-icon ${color}`}>
                     <Icon size={22} />
                   </span>
@@ -1642,7 +1645,7 @@ function Today() {
                 );
               })}
             </ul>
-            <NavLink to="/rewards" className="text-button">
+            <NavLink to="/achievements" className="text-button">
               {t('viewAchievements')}
               <ChevronRight size={16} />
             </NavLink>
@@ -1816,8 +1819,8 @@ function DayGiftCard() {
         </>
       )}
       {gifts.length > 0 && (
-        <NavLink to="/rewards" className="text-button day-gift-footer">
-          {t('viewAllRewards')}
+        <NavLink to="/gifts" className="text-button day-gift-footer">
+          {t('viewAllGifts')}
           <ChevronRight size={16} aria-hidden="true" />
         </NavLink>
       )}
@@ -2195,7 +2198,7 @@ function GiftDetails({ description }: { description?: string }) {
   );
 }
 
-function Rewards() {
+function Gifts() {
   const { t } = useTranslation();
   const { snapshot, setModal, action, busy, notify } = useApp();
   const { document: doc, progress } = snapshot;
@@ -2203,7 +2206,7 @@ function Rewards() {
   const gifts = doc.gifts.filter((g) => !!g.archivedAt === archived);
   return (
     <>
-      <Heading title={t('rewards')} subtitle={t('rewardsSubtitle')}>
+      <Heading title={t('gifts')} subtitle={t('giftsSubtitle')}>
         <button
           className="button primary"
           disabled={busy || ![...doc.goals, ...doc.habits].some((i) => !i.archivedAt)}
@@ -2213,30 +2216,6 @@ function Rewards() {
           {t('addGift')}
         </button>
       </Heading>
-      <div className="stats-row">
-        <div className="panel">
-          <Sparkles />
-          <strong>{progress.xp}</strong>
-          <span>{t('totalXp')}</span>
-        </div>
-        <div className="panel">
-          <CircleCheck />
-          <strong>{progress.wins}</strong>
-          <span>{t('wins')}</span>
-        </div>
-        <div className="panel">
-          <Trophy />
-          <strong>
-            {progress.badges.length}
-            <small> / {badgeDefinitions.length}</small>
-          </strong>
-          <span>{t('achievements')}</span>
-        </div>
-      </div>
-      <div className="section-heading">
-        <h2>{t(archived ? 'archivedGifts' : 'nextGift')}</h2>
-        <GiftIcon size={20} />
-      </div>
       <div className="list-toolbar">
         <label className="archive-toggle">
           <input
@@ -2264,14 +2243,16 @@ function Rewards() {
                     </span>
                     {!archived && (
                       <div className="gift-card-actions">
-                        <button
-                          className="icon-button"
-                          aria-label={`${t('edit')} ${gift.title}`}
-                          disabled={busy}
-                          onClick={() => setModal({ kind: 'gift', gift })}
-                        >
-                          <Pencil size={16} />
-                        </button>
+                        {!gift.claimedAt && (
+                          <button
+                            className="icon-button"
+                            aria-label={`${t('edit')} ${gift.title}`}
+                            disabled={busy}
+                            onClick={() => setModal({ kind: 'gift', gift })}
+                          >
+                            <Pencil size={16} />
+                          </button>
+                        )}
                         <RemoveItemButton kind="gifts" id={gift.id} title={gift.title} />
                       </div>
                     )}
@@ -2327,12 +2308,21 @@ function Rewards() {
           </div>
         )}
       </div>
-      <div className="section-heading achievements-heading">
-        <h2>{t('achievements')}</h2>
+    </>
+  );
+}
+
+function Achievements() {
+  const { t } = useTranslation();
+  const { snapshot } = useApp();
+  const { progress } = snapshot;
+  return (
+    <>
+      <Heading title={t('achievements')} subtitle={t('achievementsSubtitle')}>
         <span className="muted">
           {progress.badges.length} / {badgeDefinitions.length} {t('earned')}
         </span>
-      </div>
+      </Heading>
       <div className="badge-grid">
         {badgeDefinitions.map(([id, name, description, count, Icon], index) => {
           const earned = progress.badges.includes(id);

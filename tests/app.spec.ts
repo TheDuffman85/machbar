@@ -95,7 +95,13 @@ test('Today shows every streak and logs missed habits on their original dates', 
   await expect(streak).toHaveText('0');
   await expect(page.locator('.streak-card > div')).toHaveCount(4);
   const nav = page.getByRole('navigation', { name: 'Main navigation' }).filter({ visible: true });
-  await expect(nav.getByRole('link')).toHaveText(['Today', 'Habits', 'Goals', 'Rewards']);
+  await expect(nav.getByRole('link')).toHaveText([
+    'Today',
+    'Habits',
+    'Goals',
+    'Gifts',
+    'Achievements',
+  ]);
   const selectedDate = page.getByLabel('Selected date', { exact: true });
   await expect(page.locator('.history-toolbar input')).toHaveCount(0);
   await expect(selectedDate).toHaveAttribute('datetime', today);
@@ -522,6 +528,18 @@ test('gift unlock, claiming and achievements', async ({ page }) => {
   await serverXp(page, 10);
   const reached = page.getByRole('region', { name: 'Achievements reached on this day' });
   await expect(reached).toContainText('The first step');
+  await expect(reached.getByRole('link', { name: /The first step/ })).toHaveAttribute(
+    'href',
+    '/achievements',
+  );
+  await expect(page.getByRole('link', { name: 'See all achievements' })).toHaveAttribute(
+    'href',
+    '/achievements',
+  );
+  await expect(dayRewards.getByRole('link', { name: 'See all gifts' })).toHaveAttribute(
+    'href',
+    '/gifts',
+  );
   await expect(page.locator('.achievements-count')).toHaveText('1 / 8');
   await page.screenshot({ path: `test-results/achievements-${test.info().project.name}.png` });
   await expect(dayRewards).toContainText('1 ready');
@@ -545,7 +563,31 @@ test('gift unlock, claiming and achievements', async ({ page }) => {
     path: `test-results/day-rewards-claimed-${test.info().project.name}.png`,
   });
   await page.goto('/rewards');
+  await expect(page).toHaveURL(/\/gifts$/);
+  await expect(page.getByRole('heading', { name: 'Gifts', exact: true })).toBeVisible();
   await expect(page.getByText('Enjoyed', { exact: true })).toBeVisible();
+  await expect(page.locator('.badge-card')).toHaveCount(0);
+  await expect(page.locator('.stats-row')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Your next little reward' })).toHaveCount(0);
+  await page.screenshot({
+    path: `test-results/gifts-page-${test.info().project.name}.png`,
+    fullPage: true,
+  });
+  await page
+    .locator('nav:visible')
+    .getByRole('link', { name: 'Achievements', exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/achievements$/);
+  await expect(page.getByRole('heading', { name: 'Achievements', exact: true })).toBeVisible();
+  await expect(page.locator('.badge-card')).toHaveCount(8);
+  await expect(page.locator('.badge-card.earned')).toHaveCount(1);
+  await expect(page.locator('.gift-card')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Add a gift' })).toHaveCount(0);
+  await page.screenshot({
+    path: `test-results/achievements-page-${test.info().project.name}.png`,
+    fullPage: true,
+  });
+  await page.reload();
   await expect(page.locator('.badge-card.earned')).toHaveCount(1);
   await page.goto('/');
   await page.getByRole('button', { name: 'Undo Take a little walk', exact: true }).click();
@@ -554,9 +596,11 @@ test('gift unlock, claiming and achievements', async ({ page }) => {
     0,
   );
   await expect(page.locator('.achievements-count')).toHaveText('0 / 8');
-  await page.goto('/rewards');
+  await page.goto('/gifts');
   await expect(page.getByText('Enjoyed', { exact: true })).toBeVisible();
+  await page.goto('/achievements');
   await expect(page.locator('.badge-card.earned')).toHaveCount(0);
+  await page.goto('/gifts');
   await page.getByRole('button', { name: 'Archive New shoes', exact: true }).click();
   await page
     .getByRole('dialog', { name: 'Archive', exact: true })
@@ -1015,6 +1059,14 @@ test('English/German, dark mode and reduced motion', async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('lang', 'de');
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Einstellungen', exact: true })).toBeVisible();
+  await page.locator('nav:visible').getByRole('link', { name: 'Geschenke', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Geschenke', exact: true })).toBeVisible();
+  await page
+    .locator('nav:visible')
+    .getByRole('link', { name: 'Auszeichnungen', exact: true })
+    .click();
+  await expect(page.getByRole('heading', { name: 'Auszeichnungen', exact: true })).toBeVisible();
+  await expect(page.locator('.badge-card')).toHaveCount(8);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   expect(
@@ -1079,7 +1131,7 @@ test('layout and accessible controls', async ({ page }) => {
   const manifest = await (await page.request.get('/manifest.webmanifest')).json();
   expect(manifest.display).toBe('standalone');
   expect(manifest.icons).toHaveLength(3);
-  for (const route of ['/goals', '/habits', '/rewards', '/settings']) {
+  for (const route of ['/goals', '/habits', '/gifts', '/achievements', '/settings']) {
     await page.goto(route);
     await expect(page.locator('.page-heading')).toBeVisible();
     const result = await new AxeBuilder({ page })
@@ -1091,9 +1143,9 @@ test('layout and accessible controls', async ({ page }) => {
   }
   await page.getByRole('button', { name: 'Dark', exact: true }).click();
   await expect(page.locator('html')).toHaveClass(/dark/);
-  for (const route of ['/', '/goals', '/habits', '/rewards', '/settings']) {
+  for (const route of ['/', '/goals', '/habits', '/gifts', '/achievements', '/settings']) {
     await page.goto(route);
-    await expect(page.locator('.page-heading')).toBeVisible();
+    await expect(page.locator(route === '/' ? '.daily-hero' : '.page-heading')).toBeVisible();
     const result = await new AxeBuilder({ page })
       .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
       .analyze();
@@ -1105,7 +1157,7 @@ test('layout and accessible controls', async ({ page }) => {
     ).toBe(true);
   }
   await page.goto('/');
-  await expect(page.locator('.page-heading')).toBeVisible();
+  await expect(page.locator('.daily-hero')).toBeVisible();
   await page.screenshot({
     path: `test-results/machbar-${test.info().project.name}-dark.png`,
     fullPage: true,

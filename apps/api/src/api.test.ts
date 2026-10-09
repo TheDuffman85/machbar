@@ -49,6 +49,58 @@ async function sync(
   });
 }
 describe('document synchronization API', () => {
+  it('preserves received gift details during sync while allowing archiving', async () => {
+    const doc = (await snapshot()).document;
+    const goalId = randomUUID(),
+      giftId = randomUUID();
+    mutateDocument(doc, '/api/goals', 'POST', { title: 'Read a book' }, goalId);
+    mutateDocument(
+      doc,
+      '/api/gifts',
+      'POST',
+      {
+        title: 'A concert',
+        description: 'https://example.com/tickets',
+        icon: 'ticket',
+        targetType: 'goal',
+        targetId: goalId,
+        threshold: 1,
+      },
+      giftId,
+    );
+    doc.gifts[0]!.claimedAt = '2026-10-09T12:00:00Z';
+    expect((await sync(doc)).statusCode).toBe(200);
+    const saved = (await snapshot()).document;
+    const stale = structuredClone(saved);
+    Object.assign(stale.gifts[0]!, {
+      title: 'Changed title',
+      description: 'Changed notes',
+      icon: 'cake',
+      targetType: 'habitCount',
+      threshold: 10,
+      claimedAt: null,
+      archivedAt: '2026-10-10T12:00:00Z',
+    });
+    // Keep the replacement milestone valid so schema validation cannot mask the guard.
+    const habitId = randomUUID();
+    mutateDocument(stale, '/api/habits', 'POST', { title: 'Walk', weekdays: [1] }, habitId);
+    stale.gifts[0]!.targetId = habitId;
+    const response = await sync(stale);
+    expect(response.statusCode).toBe(200);
+    expect(response.json().document.gifts[0]).toEqual({
+      ...saved.gifts[0],
+      archivedAt: '2026-10-10T12:00:00Z',
+    });
+    expect((await snapshot()).document.gifts).toEqual(response.json().document.gifts);
+    const invalidReplacement = response.json().document;
+    invalidReplacement.goals = [];
+    Object.assign(invalidReplacement.gifts[0], {
+      targetType: 'habitCount',
+      targetId: habitId,
+    });
+    expect((await sync(invalidReplacement)).statusCode).toBe(400);
+    expect((await snapshot()).document.gifts).toEqual(response.json().document.gifts);
+  });
   it('roundtrips interval schedules and period completions without stripping their metadata', async () => {
     const doc = (await snapshot()).document;
     const habitId = randomUUID();

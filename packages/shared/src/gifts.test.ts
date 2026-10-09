@@ -42,10 +42,9 @@ function fixture() {
 }
 
 describe('gift editing', () => {
-  it('edits supplied fields without resetting the milestone, icon, notes or claim history', () => {
+  it('edits supplied fields on unclaimed gifts without resetting the milestone, icon or notes', () => {
     const { doc, edit } = fixture();
     const gift = doc.gifts[0]!;
-    gift.claimedAt = now.toISOString();
     edit({ title: 'Birthday treat' });
     expect(gift).toMatchObject({
       title: 'Birthday treat',
@@ -53,10 +52,28 @@ describe('gift editing', () => {
       icon: 'cake',
       targetType: 'habitCount',
       threshold: 7,
-      claimedAt: now.toISOString(),
+      claimedAt: null,
     });
     edit({ description: '', icon: 'ticket' });
-    expect(gift).toMatchObject({ description: '', icon: 'ticket', claimedAt: now.toISOString() });
+    expect(gift).toMatchObject({ description: '', icon: 'ticket', claimedAt: null });
+  });
+
+  it('rejects edits after receiving a gift but still allows archiving it', () => {
+    const { doc, giftId, goalId, edit } = fixture();
+    doc.gifts[0]!.claimedAt = now.toISOString();
+    const received = structuredClone(doc.gifts[0]);
+    for (const changes of [
+      { title: 'Changed title' },
+      { description: 'Changed notes' },
+      { icon: 'ticket' },
+      { threshold: 10 },
+      { targetType: 'goal', targetId: goalId },
+    ]) {
+      expect(() => edit(changes)).toThrow('GIFT_CLAIMED');
+      expect(doc.gifts[0]).toEqual(received);
+    }
+    mutateDocument(doc, `/api/gifts/${giftId}`, 'DELETE', {}, randomUUID(), now);
+    expect(doc.gifts[0]).toEqual({ ...received, archivedAt: now.toISOString() });
   });
 
   it('recalculates unlock progress and normalizes goal thresholds when changing milestones', () => {
@@ -152,7 +169,7 @@ describe('gift editing', () => {
     expect(syncDocumentSchema.safeParse(result).success).toBe(true);
   });
 
-  it('merges offline metadata edits with remote milestone edits, claims and archives', () => {
+  it('preserves received details against offline edits while retaining remote archives', () => {
     const { doc: base, giftId } = fixture();
     const local = structuredClone(base),
       server = structuredClone(base);
@@ -169,12 +186,32 @@ describe('gift editing', () => {
     server.gifts[0]!.archivedAt = now.toISOString();
     const result = mergeDocuments(base, local, server);
     expect(result.gifts[0]).toMatchObject({
-      description: 'Local link',
-      icon: 'ticket',
+      description: base.gifts[0]!.description,
+      icon: base.gifts[0]!.icon,
       threshold: 4,
       claimedAt: now.toISOString(),
       archivedAt: now.toISOString(),
     });
     expect(syncDocumentSchema.safeParse(result).success).toBe(true);
+  });
+
+  it('keeps a locally received gift intact when merging remote edits and archiving', () => {
+    const { doc: base, giftId } = fixture();
+    const local = structuredClone(base),
+      server = structuredClone(base);
+    local.gifts[0]!.claimedAt = now.toISOString();
+    mutateDocument(
+      server,
+      `/api/gifts/${giftId}`,
+      'PATCH',
+      { title: 'Remote title', description: 'Remote notes', threshold: 10 },
+      randomUUID(),
+      now,
+    );
+    server.gifts[0]!.archivedAt = now.toISOString();
+    expect(mergeDocuments(base, local, server).gifts[0]).toEqual({
+      ...local.gifts[0],
+      archivedAt: now.toISOString(),
+    });
   });
 });

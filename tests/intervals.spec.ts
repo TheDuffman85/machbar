@@ -122,7 +122,7 @@ test('all interval types create, complete, undo, edit, reward and archive entire
     recurrence: { unit: 'week', every: 2, anchor: '2026-10-12' },
   });
   expect(saved.snapshot.progress.habits[weekly.id]!.current).toBe(1);
-  await page.goto('/rewards');
+  await page.goto('/gifts');
   await page.getByRole('button', { name: 'Add a gift', exact: true }).click();
   const gift = page.getByRole('dialog');
   await gift.getByLabel('Name', { exact: true }).fill('Offline interval reward');

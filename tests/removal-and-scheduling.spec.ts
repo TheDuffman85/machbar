@@ -76,7 +76,7 @@ test('unused items delete offline while undone logs can only be archived', async
   await create(page, 'Add a step', 'Unused shelf');
   await create(page, 'Add a step', 'Unused plant');
   await remove(page, 'Unused shelf', 'Delete');
-  await page.goto('/rewards');
+  await page.goto('/gifts');
   await create(page, 'Add a gift', 'Unused treat');
   await page.goto('/goals');
   await remove(page, 'Unused home', 'Delete');

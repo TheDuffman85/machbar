@@ -94,7 +94,7 @@ test('all features save offline, survive reload and sync their full documents', 
     .fill('An offline goal');
   await page.getByRole('dialog').getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await page.goto('/rewards');
+  await page.goto('/gifts');
   await create(page, 'Add a gift', 'Offline treat');
   await page.getByRole('button', { name: 'I treated myself', exact: true }).click();
   await page
@@ -123,7 +123,7 @@ test('all features save offline, survive reload and sync their full documents', 
   await archive(page, 'Offline home');
   await page.goto('/habits');
   await archive(page, 'Offline walk');
-  await page.goto('/rewards');
+  await page.goto('/gifts');
   await archive(page, 'Offline treat');
   const local = await localEntry(page);
   expect(local.snapshot.progress.xp).toBe(30);

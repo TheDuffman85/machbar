@@ -1,6 +1,7 @@
 import { AxeBuilder } from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { localEntry, readSnapshot, writeSnapshot } from './helpers.js';
+import { applyCompletion, localDate } from '../packages/shared/src/index.js';
 
 const origin = 'http://localhost:3100';
 test.beforeEach(async ({ request }) => {
@@ -28,7 +29,7 @@ test('gifts keep editable notes, links, icons, milestones and archived claims ac
   await page.getByRole('button', { name: 'Add a habit', exact: true }).first().click();
   await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Read');
   await save(page);
-  await navigate(page, 'Rewards');
+  await navigate(page, 'Gifts');
   await page.getByLabel('Archived', { exact: true }).check();
   await expect(page.getByText('No archived gifts yet', { exact: true })).toBeVisible();
   await page.getByLabel('Archived', { exact: true }).uncheck();
@@ -85,7 +86,7 @@ test('gifts keep editable notes, links, icons, milestones and archived claims ac
     'Chocolate cake\nhttps://example.com/cake',
   );
   await page.getByRole('button', { name: 'Complete Read', exact: true }).click();
-  await navigate(page, 'Rewards');
+  await navigate(page, 'Gifts');
   await card.getByRole('button', { name: 'I treated myself', exact: true }).click();
   await page
     .getByRole('dialog')
@@ -93,12 +94,14 @@ test('gifts keep editable notes, links, icons, milestones and archived claims ac
     .click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const claimedAt = (await localEntry(page)).snapshot.document.gifts[0]!.claimedAt;
-  await card.getByRole('button', { name: 'Edit Birthday cake', exact: true }).click();
-  await page
-    .getByRole('dialog')
-    .getByLabel('A little more detail (optional)')
-    .fill('Enjoyed it!\nhttps://example.com/cake');
-  await save(page, 'Save changes');
+  await expect(card.getByRole('button', { name: 'Edit Birthday cake', exact: true })).toHaveCount(
+    0,
+  );
+  await page.reload();
+  await expect(card.getByRole('button', { name: 'Edit Birthday cake', exact: true })).toHaveCount(
+    0,
+  );
+  await expect(card.locator('.claimed-label')).toBeVisible();
   await card.getByRole('button', { name: 'Archive Birthday cake', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Archive', exact: true }).click();
   await expect(card).toHaveCount(0);
@@ -119,7 +122,7 @@ test('gifts keep editable notes, links, icons, milestones and archived claims ac
   expect(synced.document.gifts[0]).toMatchObject({
     title: 'Birthday cake',
     icon: 'cake',
-    description: 'Enjoyed it!\nhttps://example.com/cake',
+    description: 'Chocolate cake\nhttps://example.com/cake',
     targetType: 'habitStreak',
     threshold: 1,
     claimedAt,
@@ -129,7 +132,7 @@ test('gifts keep editable notes, links, icons, milestones and archived claims ac
   await page.getByLabel('Archived', { exact: true }).check();
   await expect(card.locator('[data-entity-icon="cake"]')).toBeVisible();
   await expect(card.locator('.gift-description')).toHaveText(
-    'Enjoyed it!\nhttps://example.com/cake',
+    'Chocolate cake\nhttps://example.com/cake',
   );
   await page.getByLabel('Archived', { exact: true }).uncheck();
   await expect(card).toHaveCount(0);
@@ -146,15 +149,30 @@ test('legacy gifts default to a gift icon and can be edited with an archived goa
   const goalId = crypto.randomUUID(),
     habitId = crypto.randomUUID(),
     giftId = crypto.randomUUID();
-  const claimedAt = '2026-10-08T12:00:00Z';
+  const archivedAt = '2026-10-08T12:00:00Z';
   document.goals.push({
     id: goalId,
     title: 'Old goal',
     color: 'sage',
     description: '',
     steps: [],
-    archivedAt: claimedAt,
+    archivedAt: null,
   });
+  const completedAt = new Date(archivedAt);
+  applyCompletion(
+    document,
+    {
+      operationId: crypto.randomUUID(),
+      targetType: 'goal',
+      targetId: goalId,
+      date: localDate(document.preferences.timezone, completedAt),
+      timezone: document.preferences.timezone,
+      completed: true,
+      expectedVersion: 0,
+    },
+    completedAt,
+  );
+  document.goals[0]!.archivedAt = archivedAt;
   document.habits.push({
     id: habitId,
     title: 'New habit',
@@ -176,11 +194,11 @@ test('legacy gifts default to a gift icon and can be edited with an archived goa
     targetId: goalId,
     threshold: 1,
     archivedAt: null,
-    claimedAt,
+    claimedAt: null,
   });
   await writeSnapshot(page, document);
   await page.reload();
-  await navigate(page, 'Rewards');
+  await navigate(page, 'Gifts');
   const card = page.locator('.gift-card');
   await expect(card.locator('[data-entity-icon="gift"]')).toBeVisible();
   await card.getByRole('button', { name: 'Edit Old reward', exact: true }).click();
@@ -197,7 +215,7 @@ test('legacy gifts default to a gift icon and can be edited with an archived goa
   expect(saved).toMatchObject({
     targetType: 'goal',
     targetId: goalId,
-    claimedAt,
+    claimedAt: null,
     description: 'Remember this reward',
   });
   await card.getByRole('button', { name: 'Edit Old reward', exact: true }).click();
@@ -212,7 +230,7 @@ test('legacy gifts default to a gift icon and can be edited with an archived goa
     targetType: 'habitCount',
     targetId: habitId,
     threshold: 5,
-    claimedAt,
+    claimedAt: null,
     icon: 'shoppingBag',
   });
   await expect(card.locator('[data-entity-icon="shoppingBag"]')).toBeVisible();

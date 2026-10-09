@@ -108,7 +108,7 @@ test('forms stay readable and fit the viewport from onboarding through editing',
   await page.getByRole('heading', { name: 'Switch User', exact: true }).tap();
   await expectFitsViewport(page);
 
-  for (const route of ['Today', 'Habits', 'Goals', 'Rewards']) {
+  for (const route of ['Today', 'Habits', 'Goals', 'Gifts', 'Achievements']) {
     const link = page.locator('nav:visible').getByRole('link', { name: route, exact: true });
     await link.tap();
     await expect(link).toHaveAttribute('aria-current', 'page');

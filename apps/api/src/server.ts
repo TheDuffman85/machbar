@@ -206,7 +206,15 @@ export async function buildServer(
     const result = await store.update(
       request.userId,
       (doc) => {
-        Object.assign(doc, syncDocumentSchema.parse(request.body));
+        const incoming = syncDocumentSchema.parse(request.body);
+        const received = new Map(
+          doc.gifts.filter((gift) => gift.claimedAt).map((gift) => [gift.id, gift]),
+        );
+        incoming.gifts = incoming.gifts.map((gift) => {
+          const saved = received.get(gift.id);
+          return saved ? { ...saved, archivedAt: saved.archivedAt || gift.archivedAt } : gift;
+        });
+        Object.assign(doc, received.size ? syncDocumentSchema.parse(incoming) : incoming);
       },
       expectedRevision,
       userCreation.allowed(),

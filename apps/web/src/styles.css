@@ -1323,38 +1323,6 @@ h3 {
   align-items: center;
   color: #80613d;
 }
-.stats-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 18px;
-  margin-bottom: 34px;
-}
-.stats-row .panel {
-  padding: 23px;
-  display: grid;
-  grid-template-columns: 24px auto;
-  align-items: center;
-  gap: 6px 14px;
-}
-.stats-row svg {
-  width: 21px;
-  color: #99ae96;
-}
-.stats-row strong {
-  font-size: 24px;
-  font-weight: 550;
-  letter-spacing: -1px;
-}
-.stats-row small {
-  font-size: 14px;
-  color: var(--muted);
-  font-weight: 400;
-}
-.stats-row .panel > span {
-  grid-column: 2;
-  font-size: 11px;
-  color: var(--muted);
-}
 .gift-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1451,9 +1419,6 @@ h3 {
   display: flex;
   gap: 7px;
   color: var(--green);
-}
-.achievements-heading {
-  margin-top: 37px;
 }
 .badge-grid {
   display: grid;
@@ -2078,16 +2043,6 @@ legend {
   .topbar-right {
     gap: 12px;
   }
-  .stats-row .panel {
-    padding: 17px;
-    gap: 6px;
-  }
-  .stats-row .panel strong {
-    font-size: 22px;
-  }
-  .stats-row .panel > span {
-    grid-column: 1 / -1;
-  }
   .page-heading {
     align-items: flex-start;
   }
@@ -2296,23 +2251,6 @@ legend {
   }
   .toast {
     font-size: 12px;
-  }
-  .stats-row {
-    gap: 9px;
-  }
-  .stats-row .panel {
-    padding: 15px 12px;
-    grid-template-columns: 1fr;
-    gap: 7px;
-  }
-  .stats-row .panel > span {
-    font-size: 10px;
-  }
-  .stats-row svg {
-    width: 18px;
-  }
-  .stats-row .panel strong {
-    font-size: 24px;
   }
   .gift-grid {
     grid-template-columns: 1fr;

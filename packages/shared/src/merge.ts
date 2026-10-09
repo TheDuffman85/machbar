@@ -213,6 +213,9 @@ export function mergeDocuments(
     local.gifts,
     server.gifts,
     (b, l, s) => {
+      // Receiving a gift freezes its details, including against stale offline edits.
+      if (s.claimedAt || l.claimedAt)
+        return { ...(s.claimedAt ? s : l), archivedAt: s.archivedAt || l.archivedAt };
       // Keep each unlock rule together so concurrent edits cannot pair a goal
       // type with a habit ID or carry a threshold from a different milestone.
       const milestone = (gift: typeof b) =>
