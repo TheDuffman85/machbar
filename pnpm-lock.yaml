@@ -56,6 +56,9 @@ importers:
       fastify:
         specifier: ^5.12.5
         version: 5.12.5
+      qrcode:
+        specifier: ^1.5.4
+        version: 1.5.4
       web-push:
         specifier: ^3.6.7
         version: 3.6.7(supports-color@10.2.2)
@@ -63,6 +66,9 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
     devDependencies:
+      '@types/qrcode':
+        specifier: ^1.5.6
+        version: 1.5.6
       '@types/web-push':
         specifier: ^3.6.4
         version: 3.6.4
@@ -4726,7 +4732,7 @@ snapshots:
 
   '@types/qrcode@1.5.6':
     dependencies:
-      '@types/node': 26.6.4
+      '@types/node': 24.19.1
 
   '@types/react-dom@19.3.0(@types/react@19.3.0)':
     dependencies:

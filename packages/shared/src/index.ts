@@ -383,6 +383,11 @@ export function createUser(userId: string): UserDocument {
     operations: {},
   };
 }
+/** Every completed habit occurrence, step, or goal earns 10 XP; a level takes 100 XP. */
+export function levelFor(wins: number): Pick<Progress, 'xp' | 'level' | 'levelXp'> {
+  const xp = wins * 10;
+  return { xp, level: 1 + Math.floor(xp / 100), levelXp: xp % 100 };
+}
 export function progressFor(doc: UserDocument, now = new Date()): Progress {
   const winDates = Object.values(doc.completions)
     .filter((c) => c.completed)
@@ -481,12 +486,9 @@ export function progressFor(doc: UserDocument, now = new Date()): Progress {
     );
     gifts[gift.id] = { state, current, target, stuck: state === 'locked' && !!source?.archivedAt };
   }
-  const xp = wins * 10;
   return {
-    xp,
+    ...levelFor(wins),
     wins,
-    level: 1 + Math.floor(xp / 100),
-    levelXp: xp % 100,
     badges,
     badgeDates,
     habits,

@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { SyncSnapshot } from '@machbar/shared';
+import { applyCompletion, localDate, mutateDocument, type SyncSnapshot } from '@machbar/shared';
 import { buildServer } from './server.js';
 import { SqliteStore } from './store.js';
 import { StorageBudget } from './storage-budget.js';
@@ -158,6 +158,43 @@ describe('admin page', () => {
     for (const time of times) expect(Date.parse(time)).toBeGreaterThanOrEqual(before - 1000);
     const script = await app.inject({ url: '/admin/admin.js', headers: { cookie: valid } });
     expect(script.headers['content-type']).toContain('javascript');
+  });
+
+  it('shows the level and the full user ID with a copy button and QR code', async () => {
+    await start();
+    const userId = randomUUID();
+    const headers = { 'x-machbar-user': userId };
+    const { document } = (
+      await app.inject({ url: '/api/bootstrap', headers })
+    ).json<SyncSnapshot>();
+    // Eleven wins are 110 XP: level 2 with 10 XP towards the next one.
+    for (let index = 0; index < 11; index++) {
+      const goalId = randomUUID();
+      mutateDocument(document, '/api/goals', 'POST', { title: `Goal ${index}` }, goalId);
+      applyCompletion(document, {
+        operationId: randomUUID(),
+        targetType: 'goal',
+        targetId: goalId,
+        date: localDate(document.preferences.timezone),
+        timezone: document.preferences.timezone,
+        completed: true,
+        expectedVersion: 0,
+      });
+    }
+    const saved = await app.inject({
+      method: 'PUT',
+      url: '/api/sync',
+      headers: { ...headers, origin, 'if-match': '0' },
+      payload: document,
+    });
+    expect(saved.statusCode).toBe(200);
+    const page = profileList(
+      (await app.inject({ url: '/admin', headers: { cookie: valid } })).body,
+    );
+    expect(page).toMatch(/Level<\/dt>\s*<dd>2 <small>10 \/ 100 XP<\/small>/);
+    expect(page).toContain(`<code>${userId}</code>`);
+    expect(page).toContain('<button type="button" data-copy hidden>Copy ID</button>');
+    expect(page).toMatch(/<svg role="img" aria-label="QR code of the user ID" [^>]*viewBox=/);
   });
 
   it('keeps the creation time and advances the sync time on later writes', async () => {

@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { localUserIdSchema, type AvatarOptions } from '@machbar/shared';
+import QRCode from 'qrcode';
+import { levelFor, localUserIdSchema, type AvatarOptions } from '@machbar/shared';
 import { avatarImage } from '@machbar/shared/avatar-image';
 import type { Config } from './config.js';
 import type { SqliteDatabase } from './database.js';
@@ -32,6 +33,8 @@ type ProfileRow = {
   completions: number;
   lastCompletion: string | null;
   devices: number;
+  /** Inline SVG of the plain user ID, which the app's Switch User scanner reads. */
+  qr: string;
 };
 type RateLimits = {
   api: RateLimitStatus;
@@ -137,7 +140,7 @@ export function registerAdmin(
       .type('text/html; charset=utf-8')
       .send(renderLogin(theme(request), error));
 
-  const profiles = async (): Promise<{ rows: ProfileRow[]; deleted: number }> => {
+  const profiles = async (): Promise<{ rows: Omit<ProfileRow, 'qr'>[]; deleted: number }> => {
     const db = await database.ready();
     db.exec('BEGIN');
     try {
@@ -210,6 +213,10 @@ export function registerAdmin(
       throw error;
     }
   };
+  const qr = (userId: string) =>
+    QRCode.toString(userId, { type: 'svg', margin: 4 }).then((svg) =>
+      svg.replace('<svg ', '<svg role="img" aria-label="QR code of the user ID" '),
+    );
 
   void app.register(async (admin) => {
     admin.addContentTypeParser(
@@ -223,12 +230,23 @@ export function registerAdmin(
     });
     const page = async (request: FastifyRequest, reply: FastifyReply) => {
       if (!session(request)) return loginPage(request, reply, 200);
+      const { rows, deleted } = await profiles();
+      const withQr = await Promise.all(
+        rows.map(async (row) => ({ ...row, qr: await qr(row.userId) })),
+      );
       const notice = (request.query as Record<string, unknown>).deleted;
       const message = notice === '1' ? 'deleted' : notice === '0' ? 'missing' : undefined;
       return reply
         .type('text/html; charset=utf-8')
         .send(
-          renderPage(await profiles(), rateLimits(), config, userCreation, theme(request), message),
+          renderPage(
+            { rows: withQr, deleted },
+            rateLimits(),
+            config,
+            userCreation,
+            theme(request),
+            message,
+          ),
         );
     };
     admin.get('/admin', page);
@@ -312,6 +330,23 @@ for (const button of document.querySelectorAll('[data-delete]'))
     dialog.querySelector('[data-name]').textContent = button.dataset.name;
     dialog.showModal();
   });
+// Without the Clipboard API (plain HTTP on a LAN) the ID is selected for a manual copy.
+for (const button of document.querySelectorAll('[data-copy]')) {
+  button.hidden = false;
+  let reset;
+  button.addEventListener('click', async () => {
+    const id = button.parentElement.querySelector('code');
+    try {
+      await navigator.clipboard.writeText(id.textContent);
+      button.textContent = 'Copied';
+    } catch {
+      getSelection().selectAllChildren(id);
+      button.textContent = 'Selected, press Ctrl+C';
+    }
+    clearTimeout(reset);
+    reset = setTimeout(() => (button.textContent = 'Copy ID'), 2500);
+  });
+}
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
 const units = [['year', 31536000], ['month', 2592000], ['week', 604800], ['day', 86400], ['hour', 3600], ['minute', 60]];
 for (const time of document.querySelectorAll('time[datetime]')) {
@@ -489,6 +524,7 @@ function renderPage(
 ) {
   const used = rows.reduce((sum, row) => sum + row.bytes, 0);
   const cards = rows
+    .map((row) => ({ ...row, ...levelFor(row.completions) }))
     .map(
       (row) => `<li class="card">
   <header>
@@ -500,6 +536,7 @@ function renderPage(
     <button type="button" class="delete" data-delete="/admin/profiles/${row.userId}/delete" data-name="${escape(row.name)}">Delete</button>
   </header>
   <dl class="stats">
+    ${stat('Level', row.level, `${row.levelXp} / 100 XP`)}
     ${stat('Habits', row.habits, row.archivedHabits ? `+${row.archivedHabits} archived` : '')}
     ${stat('Goals', row.goals, row.archivedGoals ? `+${row.archivedGoals} archived` : '')}
     ${stat('Steps', row.steps)}
@@ -514,6 +551,17 @@ function renderPage(
     ${stat('Revision', row.revision)}
     ${stat('Stored', bytes(row.bytes))}
   </dl>
+  <details class="identity">
+    <summary>User ID and QR code</summary>
+    <div>
+      ${row.qr}
+      <div class="id">
+        <code>${row.userId}</code>
+        <button type="button" data-copy hidden>Copy ID</button>
+        <p class="muted">Enter this ID or scan the code under <strong>Switch User</strong> in the app to open the profile on another device.</p>
+      </div>
+    </div>
+  </details>
 </li>`,
     )
     .join('\n');
@@ -654,6 +702,13 @@ dd small { font-weight: 400; color: var(--muted); }
 .meta > div { display: flex; align-items: baseline; gap: 6px; }
 .meta dt { font-size: inherit; text-transform: none; letter-spacing: 0; }
 .meta dd { margin: 0; font-weight: 500; }
+.identity { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: .9rem; }
+.identity summary { width: fit-content; color: var(--muted); cursor: pointer; }
+.identity summary:hover { color: var(--text); }
+.identity > div { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin-top: 10px; }
+.identity svg { flex: none; width: 148px; height: 148px; border-radius: 8px; }
+.identity .id { flex: 1 1 220px; min-width: 0; display: grid; justify-items: start; gap: 8px; }
+.identity code { font-size: .95rem; padding: 6px 8px; border-radius: 8px; background: var(--bg); overflow-wrap: anywhere; user-select: all; }
 button { font: inherit; border-radius: 10px; padding: 8px 14px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
 button:hover { border-color: var(--muted); }
 button.danger { background: var(--danger); border-color: var(--danger); color: var(--danger-text); font-weight: 600; }

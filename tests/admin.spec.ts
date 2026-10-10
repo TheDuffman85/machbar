@@ -79,3 +79,20 @@ test('the admin can temporarily open user creation and pick a theme', async ({ p
   await expect(page.getByText('User creation disabled')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Newcomer' })).toBeVisible();
 });
+
+test('the admin can show and copy a profile ID and its QR code', async ({ page, context }) => {
+  await onboard(page);
+  const userId = await page.evaluate(() => localStorage.getItem('machbar-user-id')!);
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const admin = await context.newPage();
+  await signIn(admin);
+  await expect(admin.getByText('Level', { exact: true })).toBeVisible();
+  await expect(admin.getByText(userId)).toBeHidden();
+  await admin.getByText('User ID and QR code').click();
+  await expect(admin.getByText(userId)).toBeVisible();
+  await expect(admin.getByRole('img', { name: 'QR code of the user ID' })).toBeVisible();
+  await admin.getByRole('button', { name: 'Copy ID' }).click();
+  await expect(admin.getByRole('button', { name: 'Copied' })).toBeVisible();
+  expect(await admin.evaluate(() => navigator.clipboard.readText())).toBe(userId);
+  await admin.screenshot({ path: test.info().outputPath('admin-identity.png'), fullPage: true });
+});
