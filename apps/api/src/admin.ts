@@ -22,6 +22,7 @@ type ProfileRow = {
   bytes: number;
   createdAt: string | null;
   updatedAt: string | null;
+  clientVersion: string | null;
   avatar: string;
   habits: number;
   archivedHabits: number;
@@ -191,6 +192,7 @@ export function registerAdmin(
           bytes: Number(row.logical_bytes),
           createdAt: row.created_at === null ? null : String(row.created_at),
           updatedAt: row.updated_at === null ? null : String(row.updated_at),
+          clientVersion: row.client_version === null ? null : String(row.client_version),
           avatar: avatarImage(
             String(row.avatar_seed),
             row.avatar_mode === 2 ? avatars.get(userId) : null,
@@ -547,6 +549,7 @@ function renderPage(
     ${stat('Last check-in', time(row.lastCompletion, 'never', true))}
     ${stat('Last sync', time(row.updatedAt, 'unknown', true))}
     ${stat('Created', time(row.createdAt, 'unknown', true))}
+    ${stat('App version', row.clientVersion === null ? '<span class="muted">unknown</span>' : `<code>${escape(row.clientVersion)}</code>`)}
     ${stat('Push devices', row.devices)}
     ${stat('Revision', row.revision)}
     ${stat('Stored', bytes(row.bytes))}

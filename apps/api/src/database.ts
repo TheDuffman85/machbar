@@ -11,7 +11,7 @@ export type { RecordKind } from './database-records.js';
 
 export const databaseFilename = 'data.db';
 export const migrationBackupDirectory = 'migration-backup';
-const schemaVersion = 5;
+const schemaVersion = 6;
 
 // Relational rows own persistence. JSON is only the API encoding and legacy
 // import format; archived files remain immutable recovery snapshots.
@@ -166,7 +166,7 @@ export class SqliteDatabase {
                   row.updated_at === null ? null : String(row.updated_at),
                 );
             }
-            db.exec(`PRAGMA user_version = ${schemaVersion}`);
+            db.exec('PRAGMA user_version = 5');
           }
           db.exec('COMMIT');
         } catch (error) {
@@ -180,6 +180,18 @@ export class SqliteDatabase {
           if (version() === 4)
             db.exec(`ALTER TABLE gifts ADD COLUMN description TEXT;
               ALTER TABLE gifts ADD COLUMN icon TEXT;
+              PRAGMA user_version = 5;`);
+          db.exec('COMMIT');
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
+      }
+      if (version() === 5) {
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          if (version() === 5)
+            db.exec(`ALTER TABLE profiles ADD COLUMN client_version TEXT;
               PRAGMA user_version = ${schemaVersion};`);
           db.exec('COMMIT');
         } catch (error) {
@@ -339,6 +351,16 @@ export class SqliteDatabase {
   async deleted(userId: string): Promise<boolean> {
     const db = await this.ready();
     return !!db.prepare('SELECT 1 FROM deleted_profiles WHERE user_id = ?').get(userId);
+  }
+
+  // A single statement outside the write queue: profile writes never set this
+  // column, and every transaction on the connection runs without awaiting.
+  async recordClientVersion(userId: string, version: string): Promise<boolean> {
+    const db = await this.ready();
+    return (
+      db.prepare('UPDATE profiles SET client_version = ? WHERE user_id = ?').run(version, userId)
+        .changes > 0
+    );
   }
 
   async close() {

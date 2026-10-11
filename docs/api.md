@@ -2,7 +2,7 @@
 
 [← README](../README.md)
 
-All `/api/*` routes require the profile's UUID access key in `X-Machbar-User`. Missing credentials return 401; malformed UUIDs return 400. IDs in a URL or request body do not authenticate a request. Reads and writes are scoped to the header identity. The backend manages profile identity, validates synchronized documents, and persists them atomically; task rules and all derived progress run in the client.
+All `/api/*` routes require the profile's UUID access key in `X-Machbar-User`. Missing credentials return 401; malformed UUIDs return 400. IDs in a URL or request body do not authenticate a request. Reads and writes are scoped to the header identity. The backend manages profile identity, validates synchronized documents, and persists them atomically; task rules and all derived progress run in the client. The app also sends its build version in `X-Machbar-Version`; the server keeps the latest value per saved profile for the admin page and ignores malformed values and failed requests.
 
 | Route                  | Purpose                                                      |
 | ---------------------- | ------------------------------------------------------------ |

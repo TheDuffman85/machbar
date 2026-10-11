@@ -87,6 +87,8 @@ test('the admin can show and copy a profile ID and its QR code', async ({ page, 
   const admin = await context.newPage();
   await signIn(admin);
   await expect(admin.getByText('Level', { exact: true })).toBeVisible();
+  // The app reports its build on every API request.
+  await expect(admin.locator('dt:text-is("App version") + dd')).toHaveText(/^\d+\.\d+\.\d+\+\d+$/);
   await expect(admin.getByText(userId)).toBeHidden();
   await admin.getByText('User ID and QR code').click();
   await expect(admin.getByText(userId)).toBeVisible();

@@ -17,7 +17,9 @@ CREATE TABLE profiles (
   logical_bytes INTEGER NOT NULL CHECK (logical_bytes >= 0),
   -- Server write times for the admin page; NULL for profiles imported before v3.
   created_at TEXT,
-  updated_at TEXT
+  updated_at TEXT,
+  -- App build that last called the API for this profile; NULL until a client reports one.
+  client_version TEXT
 ) STRICT;
 CREATE TABLE profile_avatars (
   user_id TEXT PRIMARY KEY REFERENCES profiles(user_id) ON DELETE CASCADE,

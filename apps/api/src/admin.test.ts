@@ -197,6 +197,37 @@ describe('admin page', () => {
     expect(page).toMatch(/<svg role="img" aria-label="QR code of the user ID" [^>]*viewBox=/);
   });
 
+  it('shows the client version a profile last connected with', async () => {
+    await start();
+    const userId = await saveProfile('Carol');
+    const card = async () =>
+      profileList((await app.inject({ url: '/admin', headers: { cookie: valid } })).body);
+    const connect = (version: string, headers: Record<string, string> = {}) =>
+      app.inject({
+        url: '/api/bootstrap',
+        headers: { 'x-machbar-user': userId, 'x-machbar-version': version, ...headers },
+      });
+    expect(await card()).toMatch(/App version<\/dt>\s*<dd><span class="muted">unknown<\/span>/);
+
+    expect((await connect('1.0.0+20261011120000000')).statusCode).toBe(200);
+    expect(await card()).toMatch(
+      /App version<\/dt>\s*<dd><code>1\.0\.0\+20261011120000000<\/code>/,
+    );
+    // Malformed values and rejected requests leave the last version in place.
+    await connect('<script>');
+    await connect('2.0.0', { 'x-machbar-user': 'not-an-id' });
+    await app.inject({
+      method: 'PUT',
+      url: '/api/sync',
+      headers: { 'x-machbar-user': userId, 'x-machbar-version': '3.0.0', origin },
+      payload: {},
+    });
+    expect(await card()).toContain('<code>1.0.0+20261011120000000</code>');
+
+    await connect('1.1.0+20261012120000000');
+    expect(await card()).toContain('<code>1.1.0+20261012120000000</code>');
+  });
+
   it('keeps the creation time and advances the sync time on later writes', async () => {
     await start();
     const userId = await saveProfile('Bob');

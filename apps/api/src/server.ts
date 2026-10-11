@@ -17,6 +17,7 @@ import { isApiRequest } from './api-request.js';
 import { registerNotifications, type NotificationOptions } from './notifications.js';
 import { adminPostRoutes, registerAdmin } from './admin.js';
 import { UserCreation } from './user-creation.js';
+import { registerClientVersion } from './client-version.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -158,6 +159,7 @@ export async function buildServer(
   });
   const push = registerNotifications(app, config, store, options.notifications, budget);
   registerAdmin(app, config, store, budget.database, push, userCreation, rateLimiter);
+  registerClientVersion(app, budget.database);
   const bootstrap = (document: Awaited<ReturnType<SqliteStore['read']>>) => ({
     document,
     dailyHistoryDays: config.dailyHistoryDays,

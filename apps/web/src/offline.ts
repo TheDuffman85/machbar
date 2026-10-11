@@ -15,6 +15,7 @@ import {
   type CompletionOperation,
   type SyncSnapshot,
 } from '@machbar/shared';
+import { buildInfo } from './buildInfo';
 import { migrateEntry, type Entry, type LegacyEntry, type SyncOperation } from './cache';
 export type { Entry, SyncOperation } from './cache';
 
@@ -170,6 +171,8 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   const localId = localStorage.getItem(localUserIdKey);
   if (path.startsWith('/api/') && localId && !headers.has('X-Machbar-User'))
     headers.set('X-Machbar-User', localId);
+  // Shown on the admin page as the version a profile last connected with.
+  if (path.startsWith('/api/')) headers.set('X-Machbar-Version', buildInfo.version);
   const controller = new AbortController();
   const abort = () => controller.abort();
   options.signal?.addEventListener('abort', abort, { once: true });
