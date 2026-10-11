@@ -29,9 +29,10 @@ async function holdSync(page: Page) {
   return { release, started };
 }
 
-async function position(page: Page) {
-  return page.locator('.page-heading').evaluate((heading) => ({
-    top: heading.getBoundingClientRect().top + window.scrollY,
+// Measures where `anchor` (the first element of the page) sits in the document.
+async function position(page: Page, anchor = '.page-heading') {
+  return page.locator(anchor).evaluate((element) => ({
+    top: element.getBoundingClientRect().top + window.scrollY,
     scroll: window.scrollY,
     height: document.documentElement.scrollHeight,
   }));
@@ -75,7 +76,7 @@ test('checkoffs keep the page in place and sync without a notice or toast', asyn
   await page.locator('nav:visible').getByRole('link', { name: 'Today', exact: true }).click();
   const complete = page.getByRole('button', { name: 'Complete Take a walk', exact: true });
   await complete.scrollIntoViewIfNeeded();
-  const before = await position(page);
+  const before = await position(page, '.daily-hero');
   const { release, started } = await holdSync(page);
   try {
     await complete.click();
@@ -84,14 +85,14 @@ test('checkoffs keep the page in place and sync without a notice or toast', asyn
     const toast = page.locator('.toast');
     await expect(notice).toHaveCount(0);
     await expect(toast).toHaveCount(0);
-    expect((await position(page)).top).toBe(before.top);
+    expect((await position(page, '.daily-hero')).top).toBe(before.top);
     await page.screenshot({
       path: `test-results/save-notifications-${test.info().project.name}.png`,
     });
     release();
     await readSnapshot(page);
     await expect(notice).toHaveCount(0);
-    expect((await position(page)).top).toBe(before.top);
+    expect((await position(page, '.daily-hero')).top).toBe(before.top);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       page.viewportSize()!.width,
     );
