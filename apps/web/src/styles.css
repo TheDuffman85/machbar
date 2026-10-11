@@ -1946,7 +1946,17 @@ legend {
 .settings-panel .form-actions {
   flex-wrap: wrap;
 }
-.challenge-form .checkbox-label {
+.check-in-form {
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+.check-in-form label:last-child,
+.check-in-form .form-hint {
+  margin-bottom: 0;
+}
+.challenge-form .checkbox-label,
+.check-in-form .checkbox-label {
   display: flex;
   flex-direction: row;
   align-items: center;

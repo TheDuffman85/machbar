@@ -82,6 +82,33 @@ test('optional habit reminders save offline, survive reload, and sync', async ({
   expect((await readSnapshot(page)).document.habits[0]!.reminderTime).toBeNull();
 });
 
+test('the evening check-in reminder is on at 20:00 by default and can be changed or turned off', async ({
+  page,
+}) => {
+  await ready(page);
+  await page.goto('/settings');
+  const toggle = page.getByRole('checkbox', {
+    name: 'Remind me if nothing is checked off',
+    exact: true,
+  });
+  const time = page.getByLabel('Check-in time', { exact: true });
+  await expect(toggle).toBeChecked();
+  await expect(time).toHaveValue('20:00');
+  await time.fill('21:30');
+  await expect
+    .poll(async () => (await readSnapshot(page)).document.preferences.checkInReminderTime)
+    .toBe('21:30');
+  await toggle.uncheck();
+  await expect(time).toHaveCount(0);
+  await expect
+    .poll(async () => (await readSnapshot(page)).document.preferences.checkInReminder)
+    .toBe(false);
+  await page.reload();
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  await expect(time).toHaveValue('21:30');
+});
+
 test('settings explain unavailable server configuration without prompting permission', async ({
   page,
 }) => {

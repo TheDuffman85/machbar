@@ -565,7 +565,7 @@ describe('normalized SQLite schema', () => {
     const first = stores({ maxProfiles: 1, maxStorageBytes: 1 });
     expect(await first.profiles.readExisting(doc.userId)).toEqual(doc);
     expect(await first.push.access((state) => state)).toEqual(push);
-    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(6);
+    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(7);
     expect(
       inspect((db) => db.prepare("SELECT name FROM sqlite_master WHERE name = 'records'").get()),
     ).toBeUndefined();
@@ -602,6 +602,8 @@ describe('normalized SQLite schema', () => {
       db.exec(`ALTER TABLE profiles DROP COLUMN created_at;
         ALTER TABLE profiles DROP COLUMN updated_at; DROP TABLE deleted_profiles;
         ALTER TABLE profiles DROP COLUMN client_version;
+        ALTER TABLE profiles DROP COLUMN check_in_reminder;
+        ALTER TABLE profiles DROP COLUMN check_in_reminder_time;
         ALTER TABLE goals DROP COLUMN date; ALTER TABLE goals DROP COLUMN date_present;
         ALTER TABLE goals DROP COLUMN reminder_time; ALTER TABLE goals DROP COLUMN reminder_present;
         ALTER TABLE steps DROP COLUMN reminder_time; ALTER TABLE steps DROP COLUMN reminder_present;
@@ -612,7 +614,7 @@ describe('normalized SQLite schema', () => {
     pruneUnusedArchivedItems(doc);
     doc.revision++;
     expect(await second.profiles.readExisting(doc.userId)).toEqual(doc);
-    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(6);
+    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(7);
     expect(inspect((db) => db.prepare('SELECT * FROM deleted_profiles').all())).toEqual([]);
     expect(
       inspect((db) => ({ ...db.prepare('SELECT created_at, updated_at FROM profiles').get() })),
@@ -695,7 +697,9 @@ describe('normalized SQLite schema', () => {
       ALTER TABLE goals DROP COLUMN reminder_present; ALTER TABLE steps DROP COLUMN reminder_time;
       ALTER TABLE steps DROP COLUMN reminder_present;
       ALTER TABLE gifts DROP COLUMN description; ALTER TABLE gifts DROP COLUMN icon;
-      ALTER TABLE profiles DROP COLUMN client_version; PRAGMA user_version = 3;`),
+      ALTER TABLE profiles DROP COLUMN client_version;
+        ALTER TABLE profiles DROP COLUMN check_in_reminder;
+        ALTER TABLE profiles DROP COLUMN check_in_reminder_time; PRAGMA user_version = 3;`),
     );
     pruneUnusedArchivedItems(doc);
     doc.revision++;
@@ -708,7 +712,7 @@ describe('normalized SQLite schema', () => {
       inspect((db) => db.prepare('SELECT logical_bytes FROM profiles').get()!.logical_bytes),
     ).toBe(Buffer.byteLength(JSON.stringify(doc)));
     expect(inspect((db) => db.prepare('PRAGMA foreign_key_check').all())).toEqual([]);
-    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(6);
+    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(7);
     await second.budget.close();
     expect(await stores().profiles.readExisting(doc.userId)).toEqual(doc);
   });
@@ -722,12 +726,14 @@ describe('normalized SQLite schema', () => {
     inspect((db) =>
       db.exec(`ALTER TABLE gifts DROP COLUMN description;
       ALTER TABLE gifts DROP COLUMN icon; ALTER TABLE profiles DROP COLUMN client_version;
+        ALTER TABLE profiles DROP COLUMN check_in_reminder;
+        ALTER TABLE profiles DROP COLUMN check_in_reminder_time;
       PRAGMA user_version = 4;`),
     );
     const second = stores();
     expect(await second.profiles.readExisting(doc.userId)).toEqual(doc);
     expect(inspect((db) => db.prepare('SELECT * FROM profiles').get())).toEqual(profile);
-    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(6);
+    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(7);
     await second.profiles.update(
       doc.userId,
       (saved) => {
@@ -755,12 +761,14 @@ describe('normalized SQLite schema', () => {
     await first.budget.close();
     const profile = inspect((db) => db.prepare('SELECT * FROM profiles').get());
     inspect((db) =>
-      db.exec('ALTER TABLE profiles DROP COLUMN client_version; PRAGMA user_version = 5;'),
+      db.exec(`ALTER TABLE profiles DROP COLUMN client_version;
+        ALTER TABLE profiles DROP COLUMN check_in_reminder;
+        ALTER TABLE profiles DROP COLUMN check_in_reminder_time; PRAGMA user_version = 5;`),
     );
     const second = stores();
     expect(await second.profiles.readExisting(doc.userId)).toEqual(doc);
     expect(inspect((db) => db.prepare('SELECT * FROM profiles').get())).toEqual(profile);
-    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(6);
+    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(7);
     expect(await second.budget.database.recordClientVersion(doc.userId, '1.0.0+1')).toBe(true);
     expect(await second.budget.database.recordClientVersion(randomUUID(), '1.0.0+1')).toBe(false);
     // Saving the document keeps the reported version.
@@ -768,6 +776,35 @@ describe('normalized SQLite schema', () => {
     expect(
       inspect((db) => db.prepare('SELECT client_version FROM profiles').get()!.client_version),
     ).toBe('1.0.0+1');
+  });
+
+  it('upgrades version 6 with default check-in reminders, then saves chosen ones', async () => {
+    const doc = richProfile();
+    const first = stores();
+    await first.budget.commit('profile', doc.userId, JSON.stringify(doc));
+    await first.budget.close();
+    const profile = inspect((db) => db.prepare('SELECT * FROM profiles').get());
+    inspect((db) =>
+      db.exec(`ALTER TABLE profiles DROP COLUMN check_in_reminder;
+        ALTER TABLE profiles DROP COLUMN check_in_reminder_time; PRAGMA user_version = 6;`),
+    );
+    const second = stores();
+    expect(await second.profiles.readExisting(doc.userId)).toEqual(doc);
+    expect(inspect((db) => db.prepare('SELECT * FROM profiles').get())).toEqual(profile);
+    expect(inspect((db) => db.prepare('PRAGMA user_version').get()!.user_version)).toBe(7);
+    await second.profiles.update(
+      doc.userId,
+      (saved) => {
+        saved.preferences.checkInReminder = false;
+        saved.preferences.checkInReminderTime = '21:15';
+      },
+      doc.revision,
+    );
+    doc.preferences.checkInReminder = false;
+    doc.preferences.checkInReminderTime = '21:15';
+    doc.revision++;
+    await second.budget.close();
+    expect(await stores().profiles.readExisting(doc.userId)).toEqual(doc);
   });
 
   it('imports full JSON history directly into relational tables', async () => {

@@ -90,6 +90,10 @@ export function readRecord(db: DatabaseSync, kind: RecordKind, key: string): str
                   ),
           }),
       onboarded: Boolean(profile.onboarded),
+      ...(profile.check_in_reminder === null
+        ? {}
+        : { checkInReminder: Boolean(profile.check_in_reminder) }),
+      ...optional('checkInReminderTime', profile.check_in_reminder_time),
     },
     habits: rows('habits').map((h) => ({
       title: h.title,
@@ -223,13 +227,15 @@ function writeProfile(
   const p = doc.preferences;
   db.prepare(
     `INSERT INTO profiles (user_id, revision, name, language, theme, timezone,
-    avatar_seed, avatar_mode, onboarded, logical_bytes, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    avatar_seed, avatar_mode, onboarded, check_in_reminder, check_in_reminder_time,
+    logical_bytes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (user_id) DO UPDATE SET revision = excluded.revision, name = excluded.name,
     language = excluded.language, theme = excluded.theme, timezone = excluded.timezone,
     avatar_seed = excluded.avatar_seed, avatar_mode = excluded.avatar_mode,
-    onboarded = excluded.onboarded, logical_bytes = excluded.logical_bytes,
-    updated_at = excluded.updated_at`,
+    onboarded = excluded.onboarded, check_in_reminder = excluded.check_in_reminder,
+    check_in_reminder_time = excluded.check_in_reminder_time,
+    logical_bytes = excluded.logical_bytes, updated_at = excluded.updated_at`,
   ).run(
     doc.userId,
     doc.revision,
@@ -240,6 +246,8 @@ function writeProfile(
     p.avatarSeed,
     p.avatarOptions === undefined ? 0 : p.avatarOptions === null ? 1 : 2,
     Number(p.onboarded),
+    p.checkInReminder === undefined ? null : Number(p.checkInReminder),
+    p.checkInReminderTime ?? null,
     bytes,
     writtenAt,
     writtenAt,

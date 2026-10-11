@@ -26,7 +26,7 @@ Browser storage is a local cache, not a backup. Unsynced changes depend on that 
 
 ## Reminders
 
-Habits, goals, and steps each have optional reminder times. Goal and step reminders use the profile timezone, repeat daily until completion, and start on the optional due date when one is set. Archived tasks and steps of archived goals do not send reminders. Enable notifications separately on each device in Settings.
+Habits, goals, and steps each have optional reminder times. Goal and step reminders use the profile timezone, repeat daily until completion, and start on the optional due date when one is set. Archived tasks and steps of archived goals do not send reminders. Enable notifications separately on each device in Settings. An evening check-in reminder is sent once a day when at least one habit is still open today and nothing (no habit, goal, or step) has been checked off by the chosen time. It is on by default at 20:00 in the profile timezone; turn it off or change the time under **Settings → Notifications**. Like other reminders, it reaches every device where notifications are enabled.
 
 ## Challenge icons
 

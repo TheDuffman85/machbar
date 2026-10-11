@@ -477,7 +477,8 @@ describe('notification scheduler', () => {
     await register();
     now = new Date('2026-10-07T20:00:00Z');
     await scheduler().tick();
-    expect(send).toHaveBeenCalledTimes(1);
+    // The habit reminder, plus the evening check-in because nothing was checked off.
+    expect(send).toHaveBeenCalledTimes(2);
     now = new Date('2026-10-08T12:00:00Z');
     await profiles.update(userId, (doc) => {
       const key = operationKey(doc, 'habit', doc.habits[0]!.id, '2026-10-08');
@@ -492,6 +493,35 @@ describe('notification scheduler', () => {
         updatedAt: now.toISOString(),
       };
     });
+    await scheduler().tick();
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+  it('sends the evening check-in once at the chosen time, in the profile language', async () => {
+    const bindingId = await register();
+    await profiles.update(userId, (doc) => {
+      doc.habits[0]!.reminderTime = null;
+      doc.preferences.language = 'de';
+      doc.preferences.checkInReminderTime = '21:30';
+    });
+    now = new Date('2026-10-07T19:29:00Z');
+    await scheduler().tick();
+    expect(send).not.toHaveBeenCalled();
+    now = new Date('2026-10-07T19:30:00Z');
+    await scheduler().tick();
+    await scheduler().tick();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![1]).toEqual({
+      version: 1,
+      bindingId,
+      title: 'Machbar',
+      body: 'Deine Gewohnheiten warten heute noch auf dich. Ein kleiner Schritt reicht.',
+      tag: `${bindingId}:check-in:2026-10-07`,
+      expiresAt: Date.parse('2026-10-07T22:00:00Z'),
+    });
+    await profiles.update(userId, (doc) => {
+      doc.preferences.checkInReminder = false;
+    });
+    now = new Date('2026-10-08T20:00:00Z');
     await scheduler().tick();
     expect(send).toHaveBeenCalledTimes(1);
   });

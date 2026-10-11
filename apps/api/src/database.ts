@@ -11,7 +11,7 @@ export type { RecordKind } from './database-records.js';
 
 export const databaseFilename = 'data.db';
 export const migrationBackupDirectory = 'migration-backup';
-const schemaVersion = 6;
+const schemaVersion = 7;
 
 // Relational rows own persistence. JSON is only the API encoding and legacy
 // import format; archived files remain immutable recovery snapshots.
@@ -152,7 +152,12 @@ export class SqliteDatabase {
               ALTER TABLE goals ADD COLUMN reminder_time TEXT;
               ALTER TABLE goals ADD COLUMN reminder_present INTEGER NOT NULL DEFAULT 0 CHECK (reminder_present IN (0, 1));
               ALTER TABLE steps ADD COLUMN reminder_time TEXT;
-              ALTER TABLE steps ADD COLUMN reminder_present INTEGER NOT NULL DEFAULT 0 CHECK (reminder_present IN (0, 1));`);
+              ALTER TABLE steps ADD COLUMN reminder_present INTEGER NOT NULL DEFAULT 0 CHECK (reminder_present IN (0, 1));
+              ALTER TABLE profiles ADD COLUMN client_version TEXT;
+              ALTER TABLE profiles ADD COLUMN check_in_reminder INTEGER
+                CHECK (check_in_reminder IN (0, 1));
+              ALTER TABLE profiles ADD COLUMN check_in_reminder_time TEXT;`);
+            // Rewritten profiles use the current columns, so later upgrades are included here.
             for (const row of db.prepare('SELECT user_id, updated_at FROM profiles').all()) {
               const key = String(row.user_id);
               const contents = readRecord(db, 'profile', key)!;
@@ -166,7 +171,7 @@ export class SqliteDatabase {
                   row.updated_at === null ? null : String(row.updated_at),
                 );
             }
-            db.exec('PRAGMA user_version = 5');
+            db.exec(`PRAGMA user_version = ${schemaVersion}`);
           }
           db.exec('COMMIT');
         } catch (error) {
@@ -192,6 +197,20 @@ export class SqliteDatabase {
         try {
           if (version() === 5)
             db.exec(`ALTER TABLE profiles ADD COLUMN client_version TEXT;
+              PRAGMA user_version = 6;`);
+          db.exec('COMMIT');
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
+      }
+      if (version() === 6) {
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          if (version() === 6)
+            db.exec(`ALTER TABLE profiles ADD COLUMN check_in_reminder INTEGER
+                CHECK (check_in_reminder IN (0, 1));
+              ALTER TABLE profiles ADD COLUMN check_in_reminder_time TEXT;
               PRAGMA user_version = ${schemaVersion};`);
           db.exec('COMMIT');
         } catch (error) {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Bell } from 'lucide-react';
+import { defaultCheckInReminderTime, type Preferences } from '@machbar/shared';
 import { ApiError, request } from './offline';
 import { deviceNotifications } from './notificationState';
 import {
@@ -12,7 +13,15 @@ import {
   type NotificationConfig,
 } from './notifications';
 
-export function NotificationsPanel({ userId }: { userId: string }) {
+export function NotificationsPanel({
+  userId,
+  preferences,
+  onUpdate,
+}: {
+  userId: string;
+  preferences: Preferences;
+  onUpdate: (patch: Partial<Preferences>) => void;
+}) {
   const { t } = useTranslation();
   const [config, setConfig] = useState<NotificationConfig | null>(null);
   const [enabled, setEnabled] = useState(false);
@@ -114,6 +123,60 @@ export function NotificationsPanel({ userId }: { userId: string }) {
       {permission === 'denied' && <p className="form-hint">{t('NOTIFICATIONS_BLOCKED')}</p>}
       {error && <p role="alert">{t(error)}</p>}
       {message && <p role="status">{t(message)}</p>}
+      <CheckInReminder preferences={preferences} onUpdate={onUpdate} />
     </section>
+  );
+}
+
+/** Profile-wide, so it follows the profile to every device with notifications enabled. */
+function CheckInReminder({
+  preferences,
+  onUpdate,
+}: {
+  preferences: Preferences;
+  onUpdate: (patch: Partial<Preferences>) => void;
+}) {
+  const { t } = useTranslation();
+  const savedEnabled = preferences.checkInReminder !== false;
+  const saved = preferences.checkInReminderTime ?? defaultCheckInReminderTime;
+  // Saving is asynchronous, and time inputs report an empty value while partially
+  // edited, so show local drafts until the saved preferences change.
+  const [enabled, setEnabled] = useState(savedEnabled);
+  const [time, setTime] = useState(saved);
+  useEffect(() => setEnabled(savedEnabled), [savedEnabled]);
+  useEffect(() => setTime(saved), [saved]);
+  return (
+    <form className="check-in-form" onSubmit={(e) => e.preventDefault()}>
+      <label className="checkbox-label">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => {
+            setEnabled(e.target.checked);
+            onUpdate({ checkInReminder: e.target.checked });
+          }}
+        />
+        {t('checkInReminder')}
+      </label>
+      {enabled && (
+        <label>
+          {t('checkInReminderTime')}
+          <input
+            type="time"
+            aria-label={t('checkInReminderTime')}
+            required
+            value={time}
+            onChange={(e) => {
+              setTime(e.target.value);
+              if (/^\d{2}:\d{2}$/.test(e.target.value) && e.target.value !== saved)
+                onUpdate({ checkInReminderTime: e.target.value });
+            }}
+          />
+          <span className="form-hint">
+            {t('checkInReminderHint', { timezone: preferences.timezone })}
+          </span>
+        </label>
+      )}
+    </form>
   );
 }

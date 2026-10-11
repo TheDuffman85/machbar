@@ -19,7 +19,10 @@ CREATE TABLE profiles (
   created_at TEXT,
   updated_at TEXT,
   -- App build that last called the API for this profile; NULL until a client reports one.
-  client_version TEXT
+  client_version TEXT,
+  -- NULL keeps the evening check-in reminder at its default (on, 20:00).
+  check_in_reminder INTEGER CHECK (check_in_reminder IN (0, 1)),
+  check_in_reminder_time TEXT
 ) STRICT;
 CREATE TABLE profile_avatars (
   user_id TEXT PRIMARY KEY REFERENCES profiles(user_id) ON DELETE CASCADE,

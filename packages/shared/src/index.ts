@@ -22,6 +22,9 @@ export const weekdaysSchema = z
   .max(7)
   .refine((v) => new Set(v).size === v.length);
 export const timezoneSchema = z.string().max(100).refine(validTimezone);
+const clockTimeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
+/** Used while a profile has not chosen its own check-in reminder time. */
+export const defaultCheckInReminderTime = '20:00';
 export const preferencesSchema = z.object({
   name: z.string().trim().min(1).max(60),
   language: z.enum(['en', 'de']),
@@ -30,6 +33,9 @@ export const preferencesSchema = z.object({
   avatarSeed: z.string().min(1).max(100),
   avatarOptions: avatarOptionsSchema.nullable().optional(),
   onboarded: z.boolean(),
+  // Missing values keep the evening check-in reminder on at the default time.
+  checkInReminder: z.boolean().optional(),
+  checkInReminderTime: clockTimeSchema.optional(),
 });
 export const recurrenceSchema = z
   .object({
@@ -75,11 +81,7 @@ export const giftIconChoices = [
 ] as const;
 export const iconSchema = z.enum([...iconChoices, ...giftIconChoices]);
 export type EntityIcon = z.infer<typeof iconSchema>;
-const reminderTimeSchema = z
-  .string()
-  .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)
-  .nullable()
-  .optional();
+const reminderTimeSchema = clockTimeSchema.nullable().optional();
 export const habitInputSchema = z
   .object({
     title,

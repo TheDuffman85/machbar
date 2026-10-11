@@ -2445,7 +2445,7 @@ function Achievements() {
 
 function Settings() {
   const { t, i18n } = useTranslation();
-  const { snapshot, install } = useApp();
+  const { snapshot, install, action } = useApp();
   return (
     <>
       <Heading title={t('settings')} subtitle={t('settingsSubtitle')} />
@@ -2455,7 +2455,12 @@ function Settings() {
           <ProfileForm key={snapshot.document.userId} />
         </section>
         <div>
-          <NotificationsPanel key={snapshot.document.userId} userId={snapshot.document.userId} />
+          <NotificationsPanel
+            key={snapshot.document.userId}
+            userId={snapshot.document.userId}
+            preferences={snapshot.document.preferences}
+            onUpdate={(patch) => void action('/api/preferences', 'PATCH', patch)}
+          />
           <section className="panel settings-panel">
             <span className="settings-feature-icon">
               <Download size={24} />
