@@ -75,8 +75,15 @@ test('earned level changes and undo update the plant automatically', async ({ pa
       ),
     );
   const initialLayout = await bannerLayout();
+  const celebration = page.locator('.level-up');
+  await expect(celebration).toHaveCount(0);
   await page.getByRole('button', { name: 'Complete Water my plant', exact: true }).click();
   await expect(plant).toHaveAttribute('data-level', '2');
+  await expect(celebration.getByRole('status')).toContainText('Level up!');
+  await expect(celebration.getByRole('status')).toContainText('Level 2');
+  await expect(celebration).toHaveCSS('pointer-events', 'none');
+  await page.screenshot({ path: `test-results/level-up-${test.info().project.name}.png` });
+  await expect(celebration).toHaveCount(0);
   await expect(plant.locator('.plant-leaf')).toHaveCount(2);
   await expect(growth.locator('strong')).toHaveText('Level 2');
   await expect(growth.locator('.hero-total-xp')).toHaveText('Total XP: 100 XP');
@@ -88,8 +95,10 @@ test('earned level changes and undo update the plant automatically', async ({ pa
   await page.reload();
   await expect(plant).toHaveAttribute('data-level', '2');
   await expect(ring).toHaveAttribute('aria-valuenow', '0');
+  await expect(celebration).toHaveCount(0);
   await page.getByRole('button', { name: 'Undo Water my plant', exact: true }).click();
   await expect(plant).toHaveAttribute('data-level', '1');
+  await expect(celebration).toHaveCount(0);
   await expect(growth.locator('strong')).toHaveText('Level 1');
   await expect(growth.locator('.hero-total-xp')).toHaveText('Total XP: 90 XP');
   await expect(growth.locator('.hero-next-level')).toHaveText('10 XP to the next level');

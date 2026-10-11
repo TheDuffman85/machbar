@@ -39,3 +39,5 @@ Choose **Edit avatar** in Settings to customize skin tone, hair, facial features
 ## Plant growth
 
 The Today plant grows into a rounded bush in 24-level branches: six levels add one leaf each, then the next eighteen add one blossom petal each, completing three six-petal blossoms. Petal levels do not add normal leaves. Once a branch is full, the next level begins a new branch spreading outward and upward through the crown. Blossoms sit over the foliage, and the whole plant zooms out uniformly as the bush fills out. Growth respects the device's reduced-motion setting.
+
+Reaching a new level through your own check-off or action starts a short confetti and fireworks celebration with a **Level up!** badge. It never blocks taps, so you can keep checking things off. Levels that arrive through a sync from another device, an undo, or a page reload don't trigger it. With reduced motion enabled, only the badge appears, without particles.

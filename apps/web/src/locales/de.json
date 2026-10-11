@@ -93,6 +93,8 @@
   "viewAchievements": "Alle Auszeichnungen ansehen",
   "level": "Level {{level}}",
   "xpToNext": "{{xp}} XP bis zum nächsten Level",
+  "levelUp": "Neues Level!",
+  "levelUpMessage": "Deine Pflanze wächst weiter.",
   "plantDescription": "Pflanze auf Level {{level}} mit {{leaves}} Blättern und {{petals}} Blütenblättern",
   "totalXp": "Gesamte XP",
   "wins": "Kleine Erfolge",

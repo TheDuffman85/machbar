@@ -93,6 +93,8 @@
   "viewAchievements": "See all achievements",
   "level": "Level {{level}}",
   "xpToNext": "{{xp}} XP to the next level",
+  "levelUp": "Level up!",
+  "levelUpMessage": "Your plant keeps growing.",
   "plantDescription": "Level {{level}} plant with {{leaves}} leaves and {{petals}} blossom petals",
   "totalXp": "Total XP",
   "wins": "Small wins",

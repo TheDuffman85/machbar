@@ -23,6 +23,7 @@ import { buildInfo } from './buildInfo';
 import { Avatar } from './Avatar';
 import { AvatarEditor, type AvatarValue } from './AvatarEditor';
 import { NotificationsPanel } from './NotificationsPanel';
+import { LevelUpCelebration } from './LevelUpCelebration';
 import {
   enableDeviceNotifications,
   notificationSupport,
@@ -532,6 +533,7 @@ export function App() {
   const [modal, setModal] = useState<ModalState>(null),
     [toast, setToast] = useState(''),
     [error, setError] = useState('');
+  const [levelUp, setLevelUp] = useState<{ id: number; level: number } | null>(null);
   const [themePreview, setThemePreview] = useState<{
     userId: string;
     theme: Preferences['theme'];
@@ -571,6 +573,7 @@ export function App() {
   useEffect(() => {
     setModal(null);
     setToast('');
+    setLevelUp(null);
     setError('');
     setThemePreview(null);
   }, [snapshot?.document.userId]);
@@ -715,14 +718,23 @@ export function App() {
   useEffect(() => {
     document.title = `Machbar — ${t('tagline')}`;
   }, [t, i18n.language]);
+  /** Celebrates when the user's own change, not a background sync, reaches a new level. */
+  function celebrateLevelUp(next: Entry) {
+    const reached = visibleSnapshot(next);
+    if (
+      snapshot &&
+      reached.document.userId === snapshot.document.userId &&
+      reached.progress.level > snapshot.progress.level
+    )
+      setLevelUp((current) => ({ id: (current?.id ?? 0) + 1, level: reached.progress.level }));
+  }
   async function action(path: string, method: string, body?: unknown) {
     setBusy(true);
     setError('');
     try {
-      queryClient.setQueryData(
-        ['machbar'],
-        await mutate(path, method, body, snapshot?.document.userId),
-      );
+      const next = await mutate(path, method, body, snapshot?.document.userId);
+      queryClient.setQueryData(['machbar'], next);
+      celebrateLevelUp(next);
       if (navigator.onLine) void sync();
       return true;
     } catch (e) {
@@ -743,6 +755,7 @@ export function App() {
     try {
       const next = await toggleCompletion(type, id, date, timezone, snapshot.document.userId);
       queryClient.setQueryData(['machbar'], next);
+      celebrateLevelUp(next);
       if (navigator.onLine) void sync();
     } catch (e) {
       setError(e instanceof ApiError ? e.code : 'INTERNAL_ERROR');
@@ -857,6 +870,13 @@ export function App() {
   ];
   return (
     <Context.Provider value={context}>
+      {levelUp && (
+        <LevelUpCelebration
+          key={levelUp.id}
+          level={levelUp.level}
+          onDone={() => setLevelUp(null)}
+        />
+      )}
       <div className="app-shell">
         <aside className="sidebar" aria-label={t('navigation')}>
           <Brand />

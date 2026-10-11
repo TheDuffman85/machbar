@@ -1174,6 +1174,78 @@ h3 {
     margin-bottom: -8px;
   }
 }
+.level-up {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+.level-up-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.level-up-card {
+  position: absolute;
+  top: 38%;
+  left: calc(50% + 116px);
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 220px;
+  padding: 22px 34px 20px;
+  border-radius: 24px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow:
+    0 0 0 6px color-mix(in srgb, var(--level-ring) 18%, transparent),
+    0 18px 50px #152e2530;
+  text-align: center;
+  animation: level-up-card 4.2s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+.level-up-kicker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #685679;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.dark .level-up-kicker {
+  color: #c9b9e4;
+}
+.level-up-card strong {
+  font-size: 40px;
+  line-height: 1.1;
+  color: var(--text);
+}
+.level-up-message {
+  color: var(--muted);
+  font-size: 13px;
+}
+@keyframes level-up-card {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+  12% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  82% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -54%) scale(0.96);
+  }
+}
 .spin {
   animation: spin 1.5s linear infinite;
 }
@@ -2319,6 +2391,15 @@ legend {
   }
   .toast {
     font-size: 12px;
+  }
+  .level-up-card {
+    left: 50%;
+    min-width: min(240px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
+    padding: 20px 28px 18px;
+  }
+  .level-up-card strong {
+    font-size: 34px;
   }
   .gift-grid {
     grid-template-columns: 1fr;
