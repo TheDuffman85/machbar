@@ -189,6 +189,8 @@ export async function buildServer(
     if (request.apiResponseFinished) reply.hijack();
   });
   app.get('/health', async () => ({ status: 'ok' }));
+  // Lets the app link to the admin page only when it is enabled.
+  app.get('/api/admin/config', async () => ({ available: config.admin !== null }));
   app.get('/api/bootstrap', async (request) =>
     bootstrap(await store.read(request.userId, userCreation.allowed())),
   );

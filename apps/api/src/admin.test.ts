@@ -81,12 +81,28 @@ describe('admin page', () => {
     expect((await login(password)).statusCode).toBe(404);
   });
 
+  it('tells the app whether to link to the admin page', async () => {
+    const available = async () =>
+      (
+        await app.inject({
+          url: '/api/admin/config',
+          headers: { 'x-machbar-user': randomUUID() },
+        })
+      ).json();
+    await start({});
+    expect(await available()).toEqual({ available: false });
+    await app.close();
+    await start();
+    expect(await available()).toEqual({ available: true });
+  });
+
   it('shows a login form and keeps the profiles behind a session cookie', async () => {
     await start();
     await saveProfile('Zoe');
     const anonymous = await app.inject({ url: '/admin' });
     expect(anonymous.statusCode).toBe(200);
     expect(anonymous.body).toContain('action="/admin/login"');
+    expect(anonymous.body).toContain('<a class="back" href="/">Back to the app</a>');
     expect(anonymous.body).not.toContain('Zoe');
     expect((await app.inject({ url: '/admin/admin.js' })).statusCode).toBe(401);
     expect(
@@ -158,6 +174,8 @@ describe('admin page', () => {
     for (const time of times) expect(Date.parse(time)).toBeGreaterThanOrEqual(before - 1000);
     const script = await app.inject({ url: '/admin/admin.js', headers: { cookie: valid } });
     expect(script.headers['content-type']).toContain('javascript');
+    expect(() => new Function(script.body)).not.toThrow();
+    expect(script.body).toContain("cookie('machbar_timezone')");
   });
 
   it('shows the level and the full user ID with a copy button and QR code', async () => {
@@ -316,7 +334,7 @@ describe('admin page', () => {
     expect(body).not.toContain('Nobody is blocked right now.');
   });
 
-  it('remembers the chosen theme in a cookie', async () => {
+  it('remembers the chosen theme in a cookie shared with the app', async () => {
     await start();
     const choose = (theme: string) =>
       app.inject({
@@ -327,22 +345,54 @@ describe('admin page', () => {
       });
     const dark = await choose('dark');
     expect(dark.statusCode).toBe(303);
-    expect(dark.headers['set-cookie']).toContain('machbar_admin_theme=dark');
-    expect((await choose('system')).headers['set-cookie']).toContain('Max-Age=0');
+    // Path=/ so the app reads and writes the same choice.
+    expect(dark.headers['set-cookie']).toMatch(/^machbar_theme=dark; Path=\/;/);
+    expect((await choose('system')).headers['set-cookie']).toContain('machbar_theme=system');
+    expect((await choose('x')).headers['set-cookie']).toBeUndefined();
     const signedIn = await app.inject({
       url: '/admin',
-      headers: { cookie: `${valid}; machbar_admin_theme=dark` },
+      headers: { cookie: `${valid}; machbar_theme=dark` },
     });
     expect(signedIn.body).toContain('<html lang="en" data-theme="dark">');
     expect(signedIn.body).toContain('value="dark" aria-pressed="true"');
-    const login = await app.inject({ url: '/admin', headers: { cookie: 'machbar_admin_theme=x' } });
+    const login = await app.inject({ url: '/admin', headers: { cookie: 'machbar_theme=x' } });
     expect(login.body).toContain('<html lang="en">');
     expect(login.body).not.toContain('action="/admin/theme"');
     const darkLogin = await app.inject({
       url: '/admin',
-      headers: { cookie: 'machbar_admin_theme=dark' },
+      headers: { cookie: 'machbar_theme=dark' },
     });
     expect(darkLogin.body).toContain('<html lang="en" data-theme="dark">');
+  });
+
+  it('follows the browser language until one is chosen in a cookie', async () => {
+    await start();
+    const german = await app.inject({ url: '/admin', headers: { 'accept-language': 'de-DE,en' } });
+    expect(german.body).toContain('<html lang="de">');
+    expect(german.body).toContain('Anmelden');
+    const choose = await app.inject({
+      method: 'POST',
+      url: '/admin/language',
+      headers: { ...form, origin },
+      payload: new URLSearchParams({ language: 'de' }).toString(),
+    });
+    expect(choose.statusCode).toBe(303);
+    expect(choose.headers['set-cookie']).toContain('machbar_language=de');
+    const signedIn = await app.inject({
+      url: '/admin',
+      headers: { cookie: `${valid}; machbar_language=de`, 'accept-language': 'en' },
+    });
+    expect(signedIn.body).toContain('<html lang="de">');
+    expect(signedIn.body).toContain(
+      'value="de" lang="de" aria-label="Deutsch" aria-pressed="true"',
+    );
+    expect(signedIn.body).toContain('Derzeit ist niemand gesperrt.');
+    expect(signedIn.body).toContain('data-just-now="gerade eben"');
+    const english = await app.inject({
+      url: '/admin',
+      headers: { cookie: `${valid}; machbar_language=en`, 'accept-language': 'de' },
+    });
+    expect(english.body).toContain('<html lang="en">');
   });
 
   it('deletes a profile and its push subscriptions only from a same-origin form', async () => {

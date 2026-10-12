@@ -1,7 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import QRCode from 'qrcode';
-import { levelFor, localUserIdSchema, type AvatarOptions } from '@machbar/shared';
+import {
+  levelFor,
+  localUserIdSchema,
+  preferenceCookies,
+  type AvatarOptions,
+} from '@machbar/shared';
 import { avatarImage } from '@machbar/shared/avatar-image';
 import type { Config } from './config.js';
 import type { SqliteDatabase } from './database.js';
@@ -11,6 +16,13 @@ import type { SqliteStore } from './store.js';
 import { verifyAdminPassword } from './hash-admin-password.js';
 import type { UserCreation } from './user-creation.js';
 import type { RateLimiter, RateLimitBlock, RateLimitStatus } from './rate-limit.js';
+import {
+  languages,
+  messages,
+  preferredLanguage,
+  type Language,
+  type Messages,
+} from './admin-messages.js';
 
 type ProfileRow = {
   userId: string;
@@ -48,11 +60,11 @@ export const adminPostRoutes = new Set([
   '/admin/login',
   '/admin/logout',
   '/admin/theme',
+  '/admin/language',
   '/admin/user-creation',
   adminDeleteRoute,
 ]);
 const sessionCookie = 'machbar_admin';
-const themeCookie = 'machbar_admin_theme';
 type Theme = 'light' | 'dark' | 'system';
 // Durations offered for temporarily opening profile creation, in minutes.
 const creationWindows = [15, 60, 24 * 60];
@@ -130,16 +142,28 @@ export function registerAdmin(
       .map(([ip, count]) => ({ ip, count }));
     return { api: rateLimiter.status(), login: { resetAt, tracked: failures.size, lockouts } };
   };
-  // Only a display preference, so a plain cookie readable by any /admin request.
+  // Display preferences in plain cookies the app reads and writes too, so both follow
+  // the latest choice made in either. Without a cookie, the system decides.
   const theme = (request: FastifyRequest): Theme => {
-    const value = cookieValue(request, themeCookie);
+    const value = cookieValue(request, preferenceCookies.theme);
     return value === 'light' || value === 'dark' ? value : 'system';
   };
-  const loginPage = (request: FastifyRequest, reply: FastifyReply, code: number, error?: string) =>
+  const language = (request: FastifyRequest): Language => {
+    const value = cookieValue(request, preferenceCookies.language);
+    return value === 'en' || value === 'de'
+      ? value
+      : preferredLanguage(request.headers['accept-language']);
+  };
+  const loginPage = (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    code: number,
+    error?: 'tooManyAttempts' | 'wrongPassword',
+  ) =>
     reply
       .code(code)
       .type('text/html; charset=utf-8')
-      .send(renderLogin(theme(request), error));
+      .send(renderLogin(theme(request), language(request), error));
 
   const profiles = async (): Promise<{ rows: Omit<ProfileRow, 'qr'>[]; deleted: number }> => {
     const db = await database.ready();
@@ -215,9 +239,9 @@ export function registerAdmin(
       throw error;
     }
   };
-  const qr = (userId: string) =>
+  const qr = (userId: string, label: string) =>
     QRCode.toString(userId, { type: 'svg', margin: 4 }).then((svg) =>
-      svg.replace('<svg ', '<svg role="img" aria-label="QR code of the user ID" '),
+      svg.replace('<svg ', `<svg role="img" aria-label="${escape(label)}" `),
     );
 
   void app.register(async (admin) => {
@@ -233,8 +257,9 @@ export function registerAdmin(
     const page = async (request: FastifyRequest, reply: FastifyReply) => {
       if (!session(request)) return loginPage(request, reply, 200);
       const { rows, deleted } = await profiles();
+      const lang = language(request);
       const withQr = await Promise.all(
-        rows.map(async (row) => ({ ...row, qr: await qr(row.userId) })),
+        rows.map(async (row) => ({ ...row, qr: await qr(row.userId, messages[lang].qrLabel) })),
       );
       const notice = (request.query as Record<string, unknown>).deleted;
       const message = notice === '1' ? 'deleted' : notice === '0' ? 'missing' : undefined;
@@ -247,6 +272,7 @@ export function registerAdmin(
             config,
             userCreation,
             theme(request),
+            lang,
             message,
           ),
         );
@@ -264,13 +290,13 @@ export function registerAdmin(
           request,
           reply.header('Retry-After', String(retryAfter)),
           429,
-          'Too many failed attempts. Try again later.',
+          'tooManyAttempts',
         );
       const form = request.body instanceof URLSearchParams ? request.body : new URLSearchParams();
       // Count the attempt before the slow hash so parallel guesses cannot pass the limit.
       failures.set(request.ip, (failures.get(request.ip) ?? 0) + 1);
       if (!(await verifyAdminPassword(form.get('password') ?? '', credentials.passwordHash)))
-        return loginPage(request, reply, 401, 'Wrong password.');
+        return loginPage(request, reply, 401, 'wrongPassword');
       failures.set(request.ip, Math.max(0, (failures.get(request.ip) ?? 1) - 1));
       const token = randomBytes(32).toString('base64url');
       for (const [key, expires] of sessions) if (expires <= Date.now()) sessions.delete(key);
@@ -284,18 +310,19 @@ export function registerAdmin(
       if (key) sessions.delete(key);
       return setCookie(reply, '', 0).redirect('/admin', 303);
     });
-    admin.post('/admin/theme', async (request, reply) => {
-      const form = request.body instanceof URLSearchParams ? request.body : new URLSearchParams();
-      const value = form.get('theme');
-      const cookie = `${themeCookie}=${value}; Path=/admin; SameSite=Strict${secure ? '; Secure' : ''}`;
-      reply.header(
-        'Set-Cookie',
-        value === 'light' || value === 'dark'
-          ? `${cookie}; Max-Age=${365 * 24 * 60 * 60}`
-          : `${themeCookie}=; Path=/admin; Max-Age=0`,
-      );
-      return reply.redirect('/admin', 303);
-    });
+    const preference = (name: keyof typeof preferenceCookies, allowed: readonly string[]) =>
+      admin.post(`/admin/${name}`, async (request, reply) => {
+        const form = request.body instanceof URLSearchParams ? request.body : new URLSearchParams();
+        const value = form.get(name) ?? '';
+        if (allowed.includes(value))
+          reply.header(
+            'Set-Cookie',
+            `${preferenceCookies[name]}=${value}; Path=/; Max-Age=${365 * 24 * 60 * 60}; SameSite=Strict${secure ? '; Secure' : ''}`,
+          );
+        return reply.redirect('/admin', 303);
+      });
+    preference('theme', ['light', 'dark', 'system']);
+    preference('language', ['en', 'de']);
     admin.post('/admin/user-creation', async (request, reply) => {
       if (!session(request)) return reply.redirect('/admin', 303);
       const form = request.body instanceof URLSearchParams ? request.body : new URLSearchParams();
@@ -332,6 +359,9 @@ for (const button of document.querySelectorAll('[data-delete]'))
     dialog.querySelector('[data-name]').textContent = button.dataset.name;
     dialog.showModal();
   });
+// Texts and language come from the page, which is rendered in the chosen language.
+const lang = document.documentElement.lang;
+const text = document.body.dataset;
 // Without the Clipboard API (plain HTTP on a LAN) the ID is selected for a manual copy.
 for (const button of document.querySelectorAll('[data-copy]')) {
   button.hidden = false;
@@ -340,24 +370,54 @@ for (const button of document.querySelectorAll('[data-copy]')) {
     const id = button.parentElement.querySelector('code');
     try {
       await navigator.clipboard.writeText(id.textContent);
-      button.textContent = 'Copied';
+      button.textContent = text.copied;
     } catch {
       getSelection().selectAllChildren(id);
-      button.textContent = 'Selected, press Ctrl+C';
+      button.textContent = text.selected;
     }
     clearTimeout(reset);
-    reset = setTimeout(() => (button.textContent = 'Copy ID'), 2500);
+    reset = setTimeout(() => (button.textContent = text.copyId), 2500);
   });
 }
-const relative = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+// The app shares theme, language and timezone through cookies; pick up a change made there.
+const cookie = (name) => {
+  const value = document.cookie.split('; ').find((part) => part.startsWith(name + '='))?.slice(name.length + 1);
+  try {
+    return value === undefined ? undefined : decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
+};
+// Times follow the app's timezone; without one (or an unknown one) the browser's.
+const timeZoneOf = (zone) => {
+  try {
+    return zone && new Intl.DateTimeFormat('en', { timeZone: zone }).resolvedOptions().timeZone;
+  } catch {
+    return undefined;
+  }
+};
+const timeZone = timeZoneOf(cookie('${preferenceCookies.timezone}'));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  const theme = cookie('${preferenceCookies.theme}');
+  const language = cookie('${preferenceCookies.language}');
+  const shownTheme = document.documentElement.dataset.theme ?? 'system';
+  if (
+    (['light', 'dark', 'system'].includes(theme) && theme !== shownTheme) ||
+    (['en', 'de'].includes(language) && language !== lang) ||
+    timeZoneOf(cookie('${preferenceCookies.timezone}')) !== timeZone
+  )
+    location.reload();
+});
+const relative = new Intl.RelativeTimeFormat(lang, { numeric: 'auto' });
 const units = [['year', 31536000], ['month', 2592000], ['week', 604800], ['day', 86400], ['hour', 3600], ['minute', 60]];
 for (const time of document.querySelectorAll('time[datetime]')) {
   const date = new Date(time.dateTime);
-  time.title = date.toLocaleString();
+  time.title = date.toLocaleString(lang, { timeZone, timeZoneName: 'short' });
   const seconds = (date.getTime() - Date.now()) / 1000;
-  if (!time.hasAttribute('data-relative')) time.textContent = date.toLocaleString();
+  if (!time.hasAttribute('data-relative')) time.textContent = date.toLocaleString(lang, { timeZone });
   else if (seconds > 0 && seconds < 60) time.textContent = relative.format(Math.ceil(seconds), 'second');
-  else if (Math.abs(seconds) < 60) time.textContent = 'just now';
+  else if (Math.abs(seconds) < 60) time.textContent = text.justNow;
   else {
     const [unit, size] = units.find(([, size]) => Math.abs(seconds) >= size);
     time.textContent = relative.format(Math.round(seconds / size), unit);
@@ -365,14 +425,17 @@ for (const time of document.querySelectorAll('time[datetime]')) {
 }
 `;
 
-const bytes = (value: number) =>
-  value < 1024
+const bytes = (value: number, lang: Language) => {
+  const number = (amount: number) =>
+    amount.toLocaleString(lang, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  return value < 1024
     ? `${value} B`
     : value < 1024 ** 2
-      ? `${(value / 1024).toFixed(1)} KiB`
-      : `${(value / 1024 ** 2).toFixed(1)} MiB`;
+      ? `${number(value / 1024)} KiB`
+      : `${number(value / 1024 ** 2)} MiB`;
+};
 // Times marked relative are shown as "3 hours ago" by admin.js; the UTC text is the no-JS fallback.
-const time = (value: string | null, missing = 'unknown', relative = false) => {
+const time = (value: string | null, missing = '', relative = false) => {
   if (value === null) return `<span class="muted">${missing}</span>`;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return escape(value);
@@ -381,16 +444,14 @@ const time = (value: string | null, missing = 'unknown', relative = false) => {
 };
 const stat = (label: string, value: string | number, detail = '') =>
   `<div><dt>${label}</dt><dd>${value}${detail ? ` <small>${detail}</small>` : ''}</dd></div>`;
-const usage = (label: string, used: string, limit: string, ratio: number) => {
+const usage = (t: Messages, label: string, used: string, limit: string, ratio: number) => {
   const percent = Math.min(100, ratio * 100);
   return `<div class="tile">
     <dt>${label}</dt>
-    <dd>${used} / ${limit} <small>${percent < 1 && percent > 0 ? '<1' : Math.round(percent)}% used</small></dd>
+    <dd>${used} / ${limit} <small>${t.used(percent < 1 && percent > 0 ? '<1' : String(Math.round(percent)))}</small></dd>
     <div class="meter${percent >= 90 ? ' full' : ''}" aria-hidden="true">${percent > 0 ? `<span style="width: ${percent.toFixed(2)}%"></span>` : ''}</div>
   </div>`;
 };
-const duration = (minutes: number) =>
-  minutes % 60 ? `${minutes} minutes` : minutes === 60 ? '1 hour' : `${minutes / 60} hours`;
 const icons: Record<Theme, string> = {
   light:
     '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2m-7.07-17.07 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
@@ -398,23 +459,41 @@ const icons: Record<Theme, string> = {
   system: '<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8m-4-4v4"/>',
 };
 // Works without JavaScript: each button posts the choice and the page reloads.
-const themeSwitch = (current: Theme) => `<form class="theme" method="post" action="/admin/theme">
+const themeSwitch = (
+  t: Messages,
+  current: Theme,
+) => `<form class="switch theme" method="post" action="/admin/theme">
   <fieldset>
-    <legend>Appearance</legend>
+    <legend>${t.appearance}</legend>
     ${(['light', 'dark', 'system'] as const)
       .map(
         (value) =>
-          `<button type="submit" name="theme" value="${value}" aria-pressed="${value === current}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">${icons[value]}</svg><span>${value[0]!.toUpperCase()}${value.slice(1)}</span></button>`,
+          `<button type="submit" name="theme" value="${value}" aria-pressed="${value === current}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">${icons[value]}</svg><span>${t.themes[value]}</span></button>`,
       )
       .join('')}
   </fieldset>
 </form>`;
-function creationPanel(config: Config, userCreation: UserCreation) {
+// Each option is labelled in its own language, so it can be found from either one.
+const languageSwitch = (
+  t: Messages,
+  current: Language,
+) => `<form class="switch" method="post" action="/admin/language">
+  <fieldset>
+    <legend>${t.language}</legend>
+    ${(Object.keys(languages) as Language[])
+      .map(
+        (value) =>
+          `<button type="submit" name="language" value="${value}" lang="${value}" aria-label="${languages[value]}" aria-pressed="${value === current}">${value.toUpperCase()}</button>`,
+      )
+      .join('')}
+  </fieldset>
+</form>`;
+function creationPanel(t: Messages, config: Config, userCreation: UserCreation) {
   if (!config.disableUserCreation)
     return `<section class="panel creation" aria-labelledby="creation-title">
   <div>
-    <h2 id="creation-title" class="open">User creation enabled</h2>
-    <p class="muted">Open to everyone, because <code>DISABLE_USER_CREATION</code> is <code>false</code>.</p>
+    <h2 id="creation-title" class="open">${t.creationEnabled}</h2>
+    <p class="muted">${t.creationEnabledHint('<code>DISABLE_USER_CREATION</code>', '<code>false</code>')}</p>
   </div>
 </section>`;
   const until = userCreation.openUntil();
@@ -422,41 +501,40 @@ function creationPanel(config: Config, userCreation: UserCreation) {
   <div>
     ${
       until === null
-        ? '<h2 id="creation-title">User creation disabled</h2>\n    <p class="muted">Open it temporarily so new visitors can create profiles.</p>'
-        : `<h2 id="creation-title" class="open">User creation temporarily open</h2>\n    <p class="muted">Until ${time(new Date(until).toISOString())}. It closes again at that time or when the server restarts.</p>`
+        ? `<h2 id="creation-title">${t.creationDisabled}</h2>\n    <p class="muted">${t.creationDisabledHint}</p>`
+        : `<h2 id="creation-title" class="open">${t.creationOpen}</h2>\n    <p class="muted">${t.creationOpenHint(time(new Date(until).toISOString()))}</p>`
     }
   </div>
   <form method="post" action="/admin/user-creation" class="windows">
     ${creationWindows
       .map(
         (minutes) =>
-          `<button type="submit" name="minutes" value="${minutes}">${until === null ? 'Open' : 'Extend'} for ${duration(minutes)}</button>`,
+          `<button type="submit" name="minutes" value="${minutes}">${(until === null ? t.openFor : t.extendFor)(t.duration(minutes))}</button>`,
       )
       .join('\n    ')}
-    ${until === null ? '' : '<button type="submit" name="minutes" value="0" class="danger">Close now</button>'}
+    ${until === null ? '' : `<button type="submit" name="minutes" value="0" class="danger">${t.closeNow}</button>`}
   </form>
 </section>`;
 }
 
-const banLabels: Record<RateLimitBlock['scope'], string> = {
-  ip: 'API requests per IP',
-  user: 'API requests per profile',
-  anonymous: 'Requests without a valid ID',
-  creation: 'New profiles',
-};
-const banOrder = Object.keys(banLabels);
-const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+const banOrder: RateLimitBlock['scope'][] = ['ip', 'user', 'anonymous', 'creation'];
 // Configured limits and the counters that currently answer 429. Counters live in
 // memory per fixed window, so a ban always ends when its window resets.
-function rateLimitPanel({ api, login }: RateLimits, config: Config, rows: ProfileRow[]) {
+function rateLimitPanel(
+  t: Messages,
+  lang: Language,
+  { api, login }: RateLimits,
+  config: Config,
+  rows: ProfileRow[],
+) {
   const names = new Map(rows.map((row) => [row.userId, row.name]));
   const until = (resetAt: number) => time(new Date(resetAt).toISOString(), '', true);
   const who = ({ scope, key }: RateLimitBlock) => {
-    if (scope === 'creation' && key === 'global') return 'all addresses';
+    if (scope === 'creation' && key === 'global') return t.allAddresses;
     if (scope !== 'user') return `<code>${escape(key)}</code>`;
     const name = names.get(key);
     return name === undefined
-      ? `<code>${escape(key.slice(0, 8))}</code> <span class="muted">no saved profile</span>`
+      ? `<code>${escape(key.slice(0, 8))}</code> <span class="muted">${t.noSavedProfile}</span>`
       : `${escape(name)} <code>${escape(key.slice(0, 8))}</code>`;
   };
   const blocked = [...api.blocked].sort(
@@ -465,25 +543,25 @@ function rateLimitPanel({ api, login }: RateLimits, config: Config, rows: Profil
   const bans = [
     ...(api.tracked >= api.capacity
       ? [
-          `<li class="alert"><span>Counter table full</span> <span class="muted">Requests from new IPs and IDs are rejected · resets ${until(api.resetAt)}</span></li>`,
+          `<li class="alert"><span>${t.counterTableFull}</span> <span class="muted">${t.counterTableFullHint(until(api.resetAt))}</span></li>`,
         ]
       : []),
     ...(login.tracked >= 10_000
       ? [
-          `<li class="alert"><span>Admin sign-in table full</span> <span class="muted">Sign-ins from new IPs are rejected · resets ${until(login.resetAt)}</span></li>`,
+          `<li class="alert"><span>${t.loginTableFull}</span> <span class="muted">${t.loginTableFullHint(until(login.resetAt))}</span></li>`,
         ]
       : []),
     ...blocked
       .slice(0, maxListedBans)
       .map(
         (ban) =>
-          `<li><span>${banLabels[ban.scope]}</span> ${who(ban)} <span class="muted">${ban.count} / ${ban.limit} · lifted ${until(api.resetAt)}</span></li>`,
+          `<li><span>${t.banLabels[ban.scope]}</span> ${who(ban)} <span class="muted">${ban.count} / ${ban.limit} · ${t.lifted(until(api.resetAt))}</span></li>`,
       ),
     ...login.lockouts
       .slice(0, maxListedBans)
       .map(
         ({ ip, count }) =>
-          `<li><span>Admin sign-in</span> <code>${escape(ip)}</code> <span class="muted">${plural(count, 'failed attempt')} · lifted ${until(login.resetAt)}</span></li>`,
+          `<li><span>${t.adminSignIn}</span> <code>${escape(ip)}</code> <span class="muted">${t.failedAttempts(count)} · ${t.lifted(until(login.resetAt))}</span></li>`,
       ),
   ];
   const hidden =
@@ -494,24 +572,24 @@ function rateLimitPanel({ api, login }: RateLimits, config: Config, rows: Profil
   return `<section class="panel limits" aria-labelledby="limits-title">
   <div class="limits-head">
     <div>
-      <h2 id="limits-title">Rate limits</h2>
-      <p class="muted">Counted in fixed windows of ${plural(config.rateLimitWindowSeconds, 'second')}; the current one resets ${until(api.resetAt)}. Counters are kept in memory and cleared on restart.</p>
+      <h2 id="limits-title">${t.rateLimits}</h2>
+      <p class="muted">${t.rateLimitWindow(config.rateLimitWindowSeconds, until(api.resetAt))}</p>
     </div>
-    <span class="badge${active || full ? ' alert' : ''}">${active ? plural(active, 'active ban') : full ? 'Counters full' : 'No active bans'}</span>
+    <span class="badge${active || full ? ' alert' : ''}">${active ? t.activeBans(active) : full ? t.countersFull : t.noActiveBans}</span>
   </div>
   <dl class="stats">
-    ${stat('Per IP', config.rateLimitMaxPerIp, 'API requests')}
-    ${stat('Per profile', config.rateLimitMaxPerUser, 'across devices')}
-    ${stat('Without ID', config.rateLimitMaxAnonymous, 'per IP')}
-    ${stat('New profiles', config.rateLimitMaxNewUsers, 'per IP and in total')}
-    ${stat('Admin sign-in', maxLoginFailures, 'failures per IP')}
-    ${stat('Counters', `${api.tracked.toLocaleString('en')} / ${api.capacity.toLocaleString('en')}`, 'tracked this window')}
+    ${stat(t.perIp, config.rateLimitMaxPerIp, t.apiRequests)}
+    ${stat(t.perProfile, config.rateLimitMaxPerUser, t.acrossDevices)}
+    ${stat(t.withoutId, config.rateLimitMaxAnonymous, t.perIpDetail)}
+    ${stat(t.newProfiles, config.rateLimitMaxNewUsers, t.perIpAndTotal)}
+    ${stat(t.adminSignIn, maxLoginFailures, t.failuresPerIp)}
+    ${stat(t.counters, `${api.tracked.toLocaleString(lang)} / ${api.capacity.toLocaleString(lang)}`, t.trackedThisWindow)}
   </dl>
-  <h3>Currently blocked</h3>
+  <h3>${t.currentlyBlocked}</h3>
   ${
     bans.length
-      ? `<ul class="bans">\n    ${bans.join('\n    ')}${hidden ? `\n    <li class="muted">and ${hidden} more</li>` : ''}\n  </ul>`
-      : '<p class="muted">Nobody is blocked right now.</p>'
+      ? `<ul class="bans">\n    ${bans.join('\n    ')}${hidden ? `\n    <li class="muted">${t.andMore(hidden)}</li>` : ''}\n  </ul>`
+      : `<p class="muted">${t.nobodyBlocked}</p>`
   }
 </section>`;
 }
@@ -522,8 +600,10 @@ function renderPage(
   config: Config,
   userCreation: UserCreation,
   theme: Theme,
+  lang: Language,
   notice?: 'deleted' | 'missing',
 ) {
+  const t = messages[lang];
   const used = rows.reduce((sum, row) => sum + row.bytes, 0);
   const cards = rows
     .map((row) => ({ ...row, ...levelFor(row.completions) }))
@@ -533,35 +613,35 @@ function renderPage(
     <img src="${row.avatar}" alt="" width="48" height="48">
     <div class="who">
       <h3>${escape(row.name)}</h3>
-      <p class="muted"><code>${row.userId.slice(0, 8)}</code> · ${escape(row.language)} · ${escape(row.timezone)}${row.onboarded ? '' : ' · <span class="badge">not onboarded</span>'}</p>
+      <p class="muted"><code>${row.userId.slice(0, 8)}</code> · ${escape(row.language)} · ${escape(row.timezone)}${row.onboarded ? '' : ` · <span class="badge">${t.notOnboarded}</span>`}</p>
     </div>
-    <button type="button" class="delete" data-delete="/admin/profiles/${row.userId}/delete" data-name="${escape(row.name)}">Delete</button>
+    <button type="button" class="delete" data-delete="/admin/profiles/${row.userId}/delete" data-name="${escape(row.name)}">${t.delete}</button>
   </header>
   <dl class="stats">
-    ${stat('Level', row.level, `${row.levelXp} / 100 XP`)}
-    ${stat('Habits', row.habits, row.archivedHabits ? `+${row.archivedHabits} archived` : '')}
-    ${stat('Goals', row.goals, row.archivedGoals ? `+${row.archivedGoals} archived` : '')}
-    ${stat('Steps', row.steps)}
-    ${stat('Gifts', row.gifts, row.claimedGifts ? `${row.claimedGifts} claimed` : '')}
-    ${stat('Check-ins', row.completions)}
+    ${stat(t.level, row.level, `${row.levelXp} / 100 XP`)}
+    ${stat(t.habits, row.habits, row.archivedHabits ? t.archived(row.archivedHabits) : '')}
+    ${stat(t.goals, row.goals, row.archivedGoals ? t.archived(row.archivedGoals) : '')}
+    ${stat(t.steps, row.steps)}
+    ${stat(t.gifts, row.gifts, row.claimedGifts ? t.claimed(row.claimedGifts) : '')}
+    ${stat(t.checkIns, row.completions)}
   </dl>
   <dl class="meta">
-    ${stat('Last check-in', time(row.lastCompletion, 'never', true))}
-    ${stat('Last sync', time(row.updatedAt, 'unknown', true))}
-    ${stat('Created', time(row.createdAt, 'unknown', true))}
-    ${stat('App version', row.clientVersion === null ? '<span class="muted">unknown</span>' : `<code>${escape(row.clientVersion)}</code>`)}
-    ${stat('Push devices', row.devices)}
-    ${stat('Revision', row.revision)}
-    ${stat('Stored', bytes(row.bytes))}
+    ${stat(t.lastCheckIn, time(row.lastCompletion, t.never, true))}
+    ${stat(t.lastSync, time(row.updatedAt, t.unknown, true))}
+    ${stat(t.created, time(row.createdAt, t.unknown, true))}
+    ${stat(t.appVersion, row.clientVersion === null ? `<span class="muted">${t.unknown}</span>` : `<code>${escape(row.clientVersion)}</code>`)}
+    ${stat(t.pushDevices, row.devices)}
+    ${stat(t.revision, row.revision)}
+    ${stat(t.stored, bytes(row.bytes, lang))}
   </dl>
   <details class="identity">
-    <summary>User ID and QR code</summary>
+    <summary>${t.userIdAndQr}</summary>
     <div>
       ${row.qr}
       <div class="id">
         <code>${row.userId}</code>
-        <button type="button" data-copy hidden>Copy ID</button>
-        <p class="muted">Enter this ID or scan the code under <strong>Switch User</strong> in the app to open the profile on another device.</p>
+        <button type="button" data-copy hidden>${t.copyId}</button>
+        <p class="muted">${t.idHint(`<strong>${t.switchUser}</strong>`)}</p>
       </div>
     </div>
   </details>
@@ -569,66 +649,82 @@ function renderPage(
     )
     .join('\n');
   return layout(
-    'Machbar admin',
+    t.title,
     theme,
+    lang,
     `<main>
 <div class="top">
-  <h1><img src="/favicon.svg" alt="" width="28" height="28">Machbar admin</h1>
+  <h1><img src="/favicon.svg" alt="" width="28" height="28">${t.title}</h1>
   <div class="tools">
-    ${themeSwitch(theme)}
-    <form method="post" action="/admin/logout"><button type="submit">Sign out</button></form>
+    ${languageSwitch(t, lang)}
+    ${themeSwitch(t, theme)}
+    <form method="post" action="/admin/logout"><button type="submit">${t.signOut}</button></form>
   </div>
 </div>
-${notice === 'deleted' ? '<p class="notice" role="status">Profile deleted.</p>' : ''}
-${notice === 'missing' ? '<p class="notice" role="status">That profile no longer exists.</p>' : ''}
+${notice === 'deleted' ? `<p class="notice" role="status">${t.profileDeleted}</p>` : ''}
+${notice === 'missing' ? `<p class="notice" role="status">${t.profileMissing}</p>` : ''}
 <dl class="overview">
-  ${usage('Profiles', String(rows.length), String(config.maxProfiles), rows.length / config.maxProfiles)}
-  ${usage('Profile storage', bytes(used), bytes(config.maxStorageBytes), used / config.maxStorageBytes)}
+  ${usage(t, t.profiles, String(rows.length), String(config.maxProfiles), rows.length / config.maxProfiles)}
+  ${usage(t, t.profileStorage, bytes(used, lang), bytes(config.maxStorageBytes, lang), used / config.maxStorageBytes)}
   <div class="tile">
-    <dt>Blocked IDs</dt>
-    <dd>${deleted} <small>deleted ${deleted === 1 ? 'ID' : 'IDs'} blocked</small></dd>
+    <dt>${t.blockedIds}</dt>
+    <dd>${deleted} <small>${t.deletedIdsBlocked(deleted)}</small></dd>
   </div>
 </dl>
-${creationPanel(config, userCreation)}
-${rateLimitPanel(limits, config, rows)}
-<h2 class="section">Profiles</h2>
-${rows.length ? `<ul>\n${cards}\n</ul>` : '<p class="empty muted">No saved profiles yet.</p>'}
+${creationPanel(t, config, userCreation)}
+${rateLimitPanel(t, lang, limits, config, rows)}
+<h2 class="section">${t.profiles}</h2>
+${rows.length ? `<ul>\n${cards}\n</ul>` : `<p class="empty muted">${t.noProfiles}</p>`}
 </main>
 <dialog id="confirm-delete" aria-labelledby="confirm-title">
   <form method="post">
-    <h2 id="confirm-title">Delete profile?</h2>
-    <p><strong data-name></strong> and all of its habits, goals, gifts, check-ins and push subscriptions will be permanently deleted. Its ID is blocked, so devices that still have the profile cannot upload it again. This cannot be undone.</p>
+    <h2 id="confirm-title">${t.deleteProfileTitle}</h2>
+    <p>${t.deleteProfileText('<strong data-name></strong>')}</p>
     <div class="actions">
-      <button type="submit" formmethod="dialog" autofocus>Cancel</button>
-      <button type="submit" class="danger">Delete profile</button>
+      <button type="submit" formmethod="dialog" autofocus>${t.cancel}</button>
+      <button type="submit" class="danger">${t.deleteProfile}</button>
     </div>
   </form>
 </dialog>
 <script src="/admin/admin.js"></script>
 `,
+    { copied: t.copied, selected: t.selected, 'copy-id': t.copyId, 'just-now': t.justNow },
   );
 }
 
-// No theme switch here; it follows the system or the choice made after signing in.
-function renderLogin(theme: Theme, error?: string) {
+// No switches here; they follow the system or the choices made after signing in.
+function renderLogin(theme: Theme, lang: Language, error?: 'tooManyAttempts' | 'wrongPassword') {
+  const t = messages[lang];
   return layout(
-    'Machbar admin sign-in',
+    t.signInTitle,
     theme,
+    lang,
     `<main>
 <form class="login" method="post" action="/admin/login">
-  <h1>Machbar admin</h1>
-  ${error ? `<p class="error" role="alert">${escape(error)}</p>` : ''}
-  <label>Password <input name="password" type="password" autocomplete="current-password" required autofocus></label>
-  <button type="submit" class="primary">Sign in</button>
+  <h1>${t.title}</h1>
+  ${error ? `<p class="error" role="alert">${t[error]}</p>` : ''}
+  <label>${t.password} <input name="password" type="password" autocomplete="current-password" required autofocus></label>
+  <button type="submit" class="primary">${t.signIn}</button>
+  <a class="back" href="/">${t.backToApp}</a>
 </form>
 </main>
 `,
   );
 }
 
-function layout(title: string, theme: Theme, body: string) {
+// Texts for admin.js go on the body as data attributes.
+function layout(
+  title: string,
+  theme: Theme,
+  lang: Language,
+  body: string,
+  data: Record<string, string> = {},
+) {
+  const attributes = Object.entries(data)
+    .map(([key, value]) => ` data-${key}="${escape(value)}"`)
+    .join('');
   return `<!doctype html>
-<html lang="en"${theme === 'system' ? '' : ` data-theme="${theme}"`}>
+<html lang="${lang}"${theme === 'system' ? '' : ` data-theme="${theme}"`}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -659,11 +755,11 @@ ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
 .top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
 .top h1 { display: flex; align-items: center; gap: 10px; font-size: 1.35rem; }
 .tools { display: flex; align-items: center; gap: 8px; }
-.theme fieldset { display: flex; gap: 2px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); margin: 0; padding: 3px; }
-.theme legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-.theme button { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: .85rem; }
+.switch fieldset { display: flex; gap: 2px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); margin: 0; padding: 3px; }
+.switch legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.switch button { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: .85rem; }
 .theme svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.theme button[aria-pressed='true'] { background: var(--green-soft); color: var(--green); font-weight: 600; }
+.switch button[aria-pressed='true'] { background: var(--green-soft); color: var(--green); font-weight: 600; }
 .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 0 0 12px; }
 .tile { padding: 14px 16px; }
 .tile dd { font-size: 1.3rem; }
@@ -717,7 +813,7 @@ button:hover { border-color: var(--muted); }
 button.danger { background: var(--danger); border-color: var(--danger); color: var(--danger-text); font-weight: 600; }
 button.delete { background: transparent; color: var(--danger); padding: 6px 12px; font-size: .9rem; font-weight: 600; }
 button.delete:hover { border-color: var(--danger); }
-.theme button:hover { color: var(--text); }
+.switch button:hover { color: var(--text); }
 dialog { border: 1px solid var(--line); border-radius: 16px; padding: 20px; max-width: min(420px, calc(100vw - 32px)); background: var(--panel); color: var(--text); }
 dialog::backdrop { background: #0008; }
 dialog h2 { margin: 0 0 8px; font-size: 1.2rem; }
@@ -725,6 +821,8 @@ dialog p { margin: 0 0 16px; }
 .actions { display: flex; justify-content: flex-end; gap: 8px; }
 .login { max-width: 360px; margin: 12vh auto 0; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 24px; display: grid; gap: 14px; }
 .login h1 { font-size: 1.3rem; }
+.login .back { justify-self: center; color: var(--muted); font-size: .9rem; }
+.login .back:hover { color: var(--text); }
 label { display: grid; gap: 4px; font-size: .9rem; color: var(--muted); }
 input { font: inherit; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
 button.primary { background: var(--green); border-color: var(--green); color: var(--panel); font-weight: 600; }
@@ -736,7 +834,7 @@ button.primary { background: var(--green); border-color: var(--green); color: va
 }
 </style>
 </head>
-<body>
+<body${attributes}>
 ${body}</body>
 </html>`;
 }

@@ -578,3 +578,13 @@ export function bootstrapFor(snapshot: SyncSnapshot, now = new Date()): Bootstra
 }
 
 export { canDeleteItem, pruneUnusedArchivedItems, type RemovableKind } from './removal.js';
+
+/**
+ * Preferences shared between the app and the admin page in plain cookies. Theme and
+ * language go both ways; the admin page only shows its times in the timezone.
+ */
+export const preferenceCookies = {
+  theme: 'machbar_theme',
+  language: 'machbar_language',
+  timezone: 'machbar_timezone',
+} as const;

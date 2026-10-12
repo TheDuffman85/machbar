@@ -37,6 +37,7 @@
   "gifts": "Gifts",
   "rewards": "Rewards",
   "settings": "Settings",
+  "admin": "Admin",
   "profileMenu": "Profile menu",
   "greeting": "Hey, {{name}}",
   "addChallenge": "Add a habit",

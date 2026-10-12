@@ -63,6 +63,7 @@ import {
   CalendarDays,
   Heart,
   QrCode,
+  ShieldCheck,
   type LucideIcon,
 } from 'lucide-react';
 import {
@@ -91,6 +92,7 @@ import {
   type Preferences,
   type Gift,
 } from '@machbar/shared';
+import { adminPreferenceChanges, writePreferenceCookies } from './sharedPreferences';
 import {
   ApiError,
   discardQueue,
@@ -308,12 +310,24 @@ function Brand() {
 }
 function ProfileMenu() {
   const { t } = useTranslation();
-  const { snapshot } = useApp();
+  const { snapshot, online } = useApp();
   const [open, setOpen] = useState(false);
+  const [adminAvailable, setAdminAvailable] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const location = useLocation();
   useEffect(() => setOpen(false), [location, snapshot.document.userId]);
+  // The admin page is server-rendered and only exists when a password hash is configured.
+  useEffect(() => {
+    if (!online || adminAvailable) return;
+    let disposed = false;
+    request<{ available: boolean }>('/api/admin/config')
+      .then((config) => !disposed && setAdminAvailable(config.available))
+      .catch(() => {});
+    return () => {
+      disposed = true;
+    };
+  }, [online, adminAvailable]);
   useEffect(() => {
     if (!open) return;
     ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus({ preventScroll: true });
@@ -384,6 +398,19 @@ function ProfileMenu() {
             <SettingsIcon size={17} />
             {t('settings')}
           </NavLink>
+          {adminAvailable && (
+            // A separate page outside the app, so it opens in the browser even from the installed PWA.
+            <a
+              href="/admin"
+              target="_blank"
+              rel="noopener"
+              role="menuitem"
+              onClick={() => setOpen(false)}
+            >
+              <ShieldCheck size={17} />
+              {t('admin')}
+            </a>
+          )}
           <NavLink to="/user-id" role="menuitem" onClick={() => setOpen(false)}>
             <QrCode size={17} />
             {t('userIdentity')}
@@ -715,6 +742,32 @@ export function App() {
     media.addEventListener('change', apply);
     return () => media.removeEventListener('change', apply);
   }, [theme, preferences?.language, preferences?.onboarded, i18n]);
+  // The admin page shares theme and language through cookies: adopt a choice made
+  // there into the profile, otherwise hand the profile's own choice (and timezone) to it.
+  useEffect(() => {
+    if (!preferences?.onboarded) return;
+    const current = {
+      theme: preferences.theme,
+      language: preferences.language,
+      timezone: preferences.timezone,
+    };
+    const exchange = () => {
+      if (document.visibilityState !== 'visible') return;
+      const changes = adminPreferenceChanges(current);
+      if (changes) void action('/api/preferences', 'PATCH', changes);
+      else writePreferenceCookies(current);
+    };
+    exchange();
+    document.addEventListener('visibilitychange', exchange);
+    return () => document.removeEventListener('visibilitychange', exchange);
+    // `action` is recreated each render; the preferences decide when to exchange.
+  }, [
+    preferences?.onboarded,
+    preferences?.theme,
+    preferences?.language,
+    preferences?.timezone,
+    snapshot?.document.userId,
+  ]);
   useEffect(() => {
     document.title = `Machbar — ${t('tagline')}`;
   }, [t, i18n.language]);
