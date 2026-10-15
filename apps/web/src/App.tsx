@@ -399,14 +399,9 @@ function ProfileMenu() {
             {t('settings')}
           </NavLink>
           {adminAvailable && (
-            // A separate page outside the app, so it opens in the browser even from the installed PWA.
-            <a
-              href="/admin"
-              target="_blank"
-              rel="noopener"
-              role="menuitem"
-              onClick={() => setOpen(false)}
-            >
+            // A server-rendered page inside the app's scope, so a full navigation keeps the
+            // installed PWA in its own window; its "back to app" link returns to `/`.
+            <a href="/admin" role="menuitem" onClick={() => setOpen(false)}>
               <ShieldCheck size={17} />
               {t('admin')}
             </a>
