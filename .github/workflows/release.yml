@@ -24,10 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-
+      # The runner's preinstalled Node is enough for these scripts. setup-node would
+      # try to cache pnpm because package.json names it, but pnpm is not installed.
       - name: Check tag matches package.json version
         id: version
         run: |
