@@ -1,4 +1,5 @@
-FROM node:24-bookworm-slim AS build
+# The build output is plain JavaScript, so it is built once on the runner platform for every target platform.
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS build
 WORKDIR /build
 RUN corepack enable && corepack prepare pnpm@11.17.0 --activate
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
