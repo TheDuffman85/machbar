@@ -342,3 +342,7 @@ Keep backups private and save `.env` separately, including VAPID keys if enabled
 ## Credits
 
 Icons: [Lucide](https://lucide.dev/license). Avatars: [DiceBear](https://www.dicebear.com/) with Pablo Stanley's [Bottts](https://bottts.com/) and [Avataaars](https://avataaars.com/) artwork, generated locally. See [license notices](apps/web/public/credits.txt) and Settings for details.
+
+## License
+
+machbar is licensed under the [GNU Affero General Public License v3.0](LICENSE).
