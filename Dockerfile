@@ -1,6 +1,10 @@
 # The build output is plain JavaScript, so it is built once on the runner platform for every target platform.
-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS build
+ARG NODE_VERSION=24.22.1
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS build
 WORKDIR /build
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@11.17.0 --activate
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 COPY packages ./packages
@@ -8,11 +12,11 @@ COPY apps ./apps
 RUN pnpm install --frozen-lockfile
 RUN pnpm build && pnpm --filter @machbar/api deploy --prod --legacy /prod/api
 
-FROM node:24-bookworm-slim AS runtime
+FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000 DATA_DIR=/app/data WEB_DIR=/app/web
 WORKDIR /app
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gosu \
+    && apt-get install -y --no-install-recommends ca-certificates gosu \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /prod/api ./api
 COPY --from=build /build/apps/web/dist ./web
