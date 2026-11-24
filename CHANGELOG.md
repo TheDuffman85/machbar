@@ -2,7 +2,7 @@
 
 Changes to Machbar, listed per version from the root [`package.json`](package.json). Pushing a tag with that version publishes a release; its section below becomes the release notes.
 
-## Unreleased
+## 1.0.1 - 2026-11-24
 
 ### Added
 
