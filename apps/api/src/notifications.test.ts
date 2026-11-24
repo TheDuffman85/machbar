@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import webpush from 'web-push';
+import * as webpush from 'web-push';
 import { applyCompletion, createUser, mutateDocument, operationKey } from '@machbar/shared';
 import { readConfig } from './config.js';
 import { buildServer } from './server.js';

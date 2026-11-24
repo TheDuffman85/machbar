@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readConfig } from './config.js';
-import webpush from 'web-push';
+import * as webpush from 'web-push';
 
 describe('Web Push configuration', () => {
   it('is disabled with absent or empty values', () => {

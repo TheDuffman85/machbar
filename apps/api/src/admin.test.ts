@@ -8,7 +8,7 @@ import { buildServer } from './server.js';
 import { SqliteStore } from './store.js';
 import { StorageBudget } from './storage-budget.js';
 import { readConfig } from './config.js';
-import webpush from 'web-push';
+import * as webpush from 'web-push';
 import { executeDatabase, storedRecord } from '../test-support/database.js';
 import {
   hashAdminPassword,

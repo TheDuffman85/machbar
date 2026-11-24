@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { Agent } from 'node:https';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import webpush from 'web-push';
+import * as webpush from 'web-push';
 const mock = vi.hoisted(() => ({ lookup: vi.fn(), request: vi.fn() }));
 vi.mock('node:dns/promises', () => ({ lookup: mock.lookup }));
 vi.mock('node:https', async (importOriginal) => ({

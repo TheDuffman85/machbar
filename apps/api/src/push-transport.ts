@@ -1,7 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { Agent, request } from 'node:https';
 import { BlockList, isIP } from 'node:net';
-import webpush from 'web-push';
+import * as webpush from 'web-push';
 import { z } from 'zod';
 import { DomainError } from '@machbar/shared';
 import type { Config } from './config.js';
