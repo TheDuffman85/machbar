@@ -328,6 +328,60 @@ describe('schedule history and synchronization', () => {
     });
   });
 
+  it('applies an interval change from today when asked, ending the current period yesterday', () => {
+    const { doc, id, habit } = fixture('month', 1, '2026-10-01');
+    check(doc, id, '2026-10-02');
+    const today = new Date('2026-10-14T12:00:00Z');
+    mutateDocument(
+      doc,
+      `/api/habits/${id}`,
+      'PATCH',
+      { recurrence: { unit: 'week', every: 2, anchor: '2026-11-02' } },
+      randomUUID(),
+      today,
+    );
+    expect(habit.schedules.at(-1)!.from).toBe('2026-11-01');
+    expect(() =>
+      mutateDocument(
+        doc,
+        `/api/habits/${id}`,
+        'PATCH',
+        {
+          startDate: '2026-10-13',
+          recurrence: { unit: 'week', every: 2, anchor: '2026-10-12' },
+        },
+        randomUUID(),
+        today,
+      ),
+    ).toThrow('VALIDATION_ERROR');
+    mutateDocument(
+      doc,
+      `/api/habits/${id}`,
+      'PATCH',
+      {
+        startDate: '2026-10-14',
+        recurrence: { unit: 'week', every: 2, anchor: '2026-10-12' },
+      },
+      randomUUID(),
+      today,
+    );
+    // The pending November change is replaced by the immediate one.
+    expect(habit.schedules.map((s) => s.from)).toEqual(['2026-10-01', '2026-10-14']);
+    expect(habit.schedules[1]!.resetStreak).toBe(true);
+    expect(occurrenceFor(habit, '2026-10-13')).toMatchObject({
+      start: '2026-10-01',
+      end: '2026-10-13',
+    });
+    expect(occurrenceFor(habit, '2026-10-14')).toMatchObject({
+      start: '2026-10-14',
+      end: '2026-10-25',
+    });
+    expect(scheduleChangeDate(habit, today)).toBe('2026-10-26');
+    expect(progressFor(doc, today).habits[id]).toEqual({ count: 1, current: 0, best: 1 });
+    check(doc, id, '2026-10-14');
+    expect(progressFor(doc, today).habits[id]).toEqual({ count: 2, current: 1, best: 1 });
+  });
+
   it('replaces a pending edit and preserves timezone changes without resetting the rhythm', () => {
     const { doc, id, habit } = fixture();
     check(doc, id, '2026-10-06');

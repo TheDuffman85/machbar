@@ -74,6 +74,7 @@ import {
   isPeriodHabit,
   alignAnchor,
   scheduleChangeDate,
+  scheduleEditToday,
   type HabitSchedule,
   type EntityIcon as IconName,
   giftIconChoices,
@@ -2956,6 +2957,11 @@ function ChallengeForm({
   const [startDate, setStartDate] = useState(
     latestSchedule && latestSchedule.from >= editBoundary ? latestSchedule.from : editBoundary,
   );
+  // An edit can opt in to starting today, which ends the current period yesterday.
+  const editToday =
+    modal.kind === 'habit' && modal.habit ? scheduleEditToday(modal.habit) : editBoundary;
+  const [immediateEdit, setImmediateEdit] = useState(false);
+  const applyNow = immediateEdit && editToday < editBoundary;
   const [date, setDate] = useState(initial && 'date' in initial ? (initial.date ?? '') : '');
   const [targetType, setTargetType] = useState<'goal' | 'habitCount' | 'habitStreak'>(
     modal.kind === 'gift' && modal.gift
@@ -2993,15 +2999,16 @@ function ChallengeForm({
       const nextUnit: Recurrence['unit'] =
         repeat === 'weekly' ? 'week' : repeat === 'monthly' ? 'month' : unit;
       const nextEvery = repeat === 'custom' ? every : 1;
-      const chosenStart = repeat === 'custom' ? startDate : editBoundary;
+      const chosenStart = applyNow ? editToday : repeat === 'custom' ? startDate : editBoundary;
       const preserveAnchor =
         initialRecurrence?.unit === nextUnit &&
         initialRecurrence.every === nextEvery &&
         (repeat !== 'custom' ||
-          startDate ===
-            (latestSchedule && latestSchedule.from >= editBoundary
-              ? latestSchedule.from
-              : editBoundary));
+          (!applyNow &&
+            startDate ===
+              (latestSchedule && latestSchedule.from >= editBoundary
+                ? latestSchedule.from
+                : editBoundary)));
       body = {
         title,
         reminderTime: reminderEnabled ? reminderTime : null,
@@ -3019,7 +3026,7 @@ function ChallengeForm({
                   ? initialRecurrence.anchor
                   : alignAnchor(chosenStart, nextUnit),
               },
-        ...(repeat === 'custom' && (!modal.habit || startDate !== editBoundary)
+        ...(!applyNow && repeat === 'custom' && (!modal.habit || startDate !== editBoundary)
           ? { startDate }
           : {}),
       };
@@ -3072,6 +3079,10 @@ function ChallengeForm({
             JSON.stringify(value) !== JSON.stringify((baseline as Record<string, unknown>)[key]),
         ),
       );
+      // Only a real rhythm change starts today; an unchanged rhythm must not cut the period short.
+      const changes = body as Record<string, unknown>;
+      if (applyNow && ('weekdays' in changes || 'recurrence' in changes))
+        changes.startDate = editToday;
     }
     if (await action(path, method, body)) setModal(null);
   }
@@ -3221,7 +3232,8 @@ function ChallengeForm({
                   type="date"
                   required
                   min={editBoundary}
-                  value={startDate}
+                  disabled={applyNow}
+                  value={applyNow ? editToday : startDate}
                   onChange={(e) => setStartDate(e.target.value)}
                 />
               </label>
@@ -3252,9 +3264,22 @@ function ChallengeForm({
               </div>
             </fieldset>
           )}
+          {modal.habit && editToday < editBoundary && (
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={immediateEdit}
+                onChange={(e) => setImmediateEdit(e.target.checked)}
+              />
+              {t('applyScheduleToday')}
+            </label>
+          )}
           {modal.habit && (
             <p className="form-hint">
-              {t('scheduleEffective', { date: repeat === 'custom' ? startDate : editBoundary })}{' '}
+              {t('scheduleEffective', {
+                date: applyNow ? editToday : repeat === 'custom' ? startDate : editBoundary,
+              })}{' '}
+              {applyNow && `${t('applyScheduleTodayHint')} `}
               {t('intervalChangeHint')}
             </p>
           )}

@@ -160,6 +160,8 @@
   "periodEnds": "Bis {{date}}",
   "completedOn": "Abgeschlossen am {{date}}",
   "scheduleEffective": "Der Rhythmus gilt ab {{date}}.",
+  "applyScheduleToday": "Änderung schon ab heute anwenden",
+  "applyScheduleTodayHint": "Der laufende Zeitraum endet dann gestern, ab heute beginnt ein neuer.",
   "intervalChangeHint": "Ein neuer Rhythmus startet eine neue aktuelle Serie. Deine beste Serie und bisherigen Erfolge bleiben erhalten.",
   "scheduleChange": "Zeitplanänderungen gelten ab morgen.",
   "color": "Farbe",

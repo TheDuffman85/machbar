@@ -2,6 +2,12 @@
 
 Changes to Machbar, listed per version from the root [`package.json`](package.json). Pushing a tag with that version publishes a release; its section below becomes the release notes.
 
+## Unreleased
+
+### Added
+
+- Habit interval changes can apply from today instead of after the current period, via a checkbox in the habit editor.
+
 ## 1.0.0 - 2026-10-16
 
 First release.

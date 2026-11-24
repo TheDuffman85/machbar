@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   alignAnchor,
   scheduleChangeDate,
+  scheduleEditToday,
   scheduleRhythm,
   same,
   DomainError,
@@ -107,18 +108,23 @@ export function mutateDocument(
       !same([...latest.weekdays].sort(), [...nextWeekdays].sort()) ||
       startDate !== undefined
     ) {
+      // Edits start after the current period by default. An explicit earlier start date
+      // (today at the earliest) ends the current period the day before.
       const boundary = scheduleChangeDate(habit, now);
-      if (startDate && startDate < boundary) throw new DomainError('VALIDATION_ERROR');
-      const active = habit.schedules.filter((s) => s.from < boundary).at(-1);
+      if (startDate && startDate < scheduleEditToday(habit, now))
+        throw new DomainError('VALIDATION_ERROR');
+      const from = startDate ?? boundary;
+      const cutoff = from < boundary ? from : boundary;
+      const active = habit.schedules.filter((s) => s.from < cutoff).at(-1);
       const schedule = {
-        from: startDate ?? boundary,
+        from,
         weekdays: nextWeekdays,
         timezone: doc.preferences.timezone,
         ...(normalized ? { recurrence: normalized } : {}),
       };
       const resetStreak = active && scheduleRhythm(active) !== scheduleRhythm(schedule);
       // Replace a pending edit rather than appending a second future schedule.
-      habit.schedules = habit.schedules.filter((s) => s.from < boundary);
+      habit.schedules = habit.schedules.filter((s) => s.from < cutoff);
       setSchedule(habit.schedules, {
         ...schedule,
         ...(resetStreak ? { resetStreak: true } : {}),

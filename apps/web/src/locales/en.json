@@ -160,6 +160,8 @@
   "periodEnds": "Until {{date}}",
   "completedOn": "Completed {{date}}",
   "scheduleEffective": "Schedule takes effect on {{date}}.",
+  "applyScheduleToday": "Apply the change from today",
+  "applyScheduleTodayHint": "The current period ends yesterday, and a new one starts today.",
   "intervalChangeHint": "A new rhythm starts a new current streak. Your best streak and past wins stay saved.",
   "scheduleChange": "Schedule changes start tomorrow.",
   "color": "Color",

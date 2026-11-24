@@ -349,6 +349,13 @@ export function scheduleChangeDate(habit: Habit, now = new Date()): string {
   if (!schedule) return localDate(habit.schedules[0]!.timezone, now);
   return addDays(periodFor(schedule, localDate(schedule.timezone, now)).end, 1);
 }
+/** Earliest start for an edit that cuts the current period short: today in the active schedule's timezone. */
+export function scheduleEditToday(habit: Habit, now = new Date()): string {
+  const schedule =
+    habit.schedules.filter((s) => s.from <= localDate(s.timezone, now)).at(-1) ??
+    habit.schedules[0]!;
+  return localDate(schedule.timezone, now);
+}
 export function operationKey(
   doc: UserDocument,
   type: Completion['targetType'],
